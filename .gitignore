@@ -1,0 +1,73 @@
+# ========================
+# ContextShield .gitignore
+# ========================
+
+# --- Environment & Secrets ---
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+*.whl
+pip-log.txt
+pip-delete-this-directory.txt
+
+# --- Virtual Environments ---
+.venv/
+venv/
+ENV/
+
+# --- Node.js / Frontend ---
+node_modules/
+frontend/dist/
+frontend/build/
+.next/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Testing ---
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Docker ---
+*.log
+
+# --- Database (local files) ---
+*.db
+*.sqlite3
+pgdata/
+
+# --- OS ---
+*.bak
+*.tmp
+*.temp
+
+# --- Build outputs ---
+*.pyc
