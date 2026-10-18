@@ -38,11 +38,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Run database migrations
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/contextshield_test
+          JWT_SECRET: test-secret-key
+        run: python -m alembic upgrade head
+
+      - name: Seed demo data (idempotency is verified in tests)
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/contextshield_test
+          JWT_SECRET: test-secret-key
+        run: python -m app.seed
+
       - name: Run tests
         working-directory: backend
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/contextshield_test
-          JWT_SECRET_KEY: test-secret-key
+          JWT_SECRET: test-secret-key
         run: pytest tests/ -v
 
   frontend-lint:

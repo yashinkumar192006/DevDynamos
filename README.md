@@ -215,11 +215,14 @@ ContextShield is a **privacy enforcement middleware** that sits between AI agent
 - Dashboard for reviewing access patterns and policy violations
 
 ### 🔐 Authentication & Authorization
-- JWT-based authentication (HS256)
-- Role-based access control (RBAC) with database-backed roles
-- Server-side authorization checks on every protected endpoint
-- Secure password hashing with bcrypt
+- JWT-based authentication (HS256); tokens carry identity only — roles are re-resolved from the database on every request
+- Server-side RBAC with reusable authorization services (resource, field, ownership, purpose checks)
+- Service-account API keys for AI agents / backend services (`X-API-Key`) — client-supplied headers like `X-User-Id` are never trusted
+- Secure password hashing with bcrypt; secrets only in environment variables
 - Demo user seeding for development and testing
+
+> Architecture, error semantics, service accounts, and React integration guidance:
+> [`docs/authentication.md`](docs/authentication.md)
 
 ---
 
@@ -231,7 +234,7 @@ ContextShield is a **privacy enforcement middleware** that sits between AI agent
 | **Database** | PostgreSQL 16 | ACID compliance, JSONB for flexible policies |
 | **ORM** | SQLAlchemy 2.x (async) | Type-safe queries, Alembic migrations |
 | **NLP / PII** | Microsoft Presidio + spaCy | Production-grade entity recognition |
-| **Auth** | python-jose (JWT) + passlib | Industry-standard token auth |
+| **Auth** | python-jose (JWT) + bcrypt | Industry-standard token auth |
 | **Frontend** | React + Vite + TypeScript | Fast dev experience, type safety |
 | **Logging** | structlog | Structured, context-aware JSON logging |
 | **Containers** | Docker + Docker Compose | Reproducible environments |
@@ -302,7 +305,28 @@ cp .env.example .env
 # Edit .env with your database credentials and JWT secret
 ```
 
-### 3. Backend Setup
+### 3. Database Setup
+
+ContextShield uses PostgreSQL with a **dedicated non-superuser account**
+(`contextshield_app`). One-time bootstrap, as a PostgreSQL superuser:
+
+```powershell
+& "C:\Program Files\PostgreSQL\18\bin\psql.exe" -U postgres -h localhost -d postgres `
+    -f backend\scripts\create_database.sql
+```
+
+Then (from `backend/`):
+
+```powershell
+python -m alembic upgrade head     # create the schema
+python -m app.check_db             # verify connectivity
+python -m app.seed                 # insert synthetic demo data (idempotent)
+```
+
+> Full instructions, verification steps, and recovery procedures:
+> [`docs/database-setup.md`](docs/database-setup.md)
+
+### 4. Backend Setup
 
 ```powershell
 cd backend
@@ -319,7 +343,7 @@ The API will be available at `http://localhost:8000`.
 
 API documentation: `http://localhost:8000/docs` (Swagger UI).
 
-### 4. Frontend Setup
+### 5. Frontend Setup
 
 ```powershell
 cd frontend
@@ -329,7 +353,7 @@ npm run dev
 
 The UI will be available at `http://localhost:5173`.
 
-### 5. Docker (Alternative — All Services)
+### 6. Docker (Alternative — All Services)
 
 ```bash
 docker compose up --build
@@ -345,12 +369,25 @@ This starts PostgreSQL, the backend, and the frontend in containers.
 |--------|----------|-------------|
 | `GET` | `/health` | Health check |
 | `POST` | `/api/v1/auth/login` | Authenticate and receive JWT |
-| `POST` | `/api/v1/auth/logout` | Invalidate session |
+| `GET` | `/api/v1/auth/me` | Current user profile (roles + permissions) |
+| `GET` | `/api/v1/auth/whoami` | Verified identity (user JWT or service API key) |
+| `POST` | `/api/v1/auth/logout` | Audit-logged logout (client discards token) |
+| `GET` | `/api/v1/admin/users` | List users — requires `admin` role/scope |
 | `POST` | `/api/v1/analyze` | Analyze a data request for privacy compliance |
 | `POST` | `/api/v1/classify` | Classify data fields for sensitivity |
 | `GET` | `/api/v1/policies` | List active privacy policies |
 | `GET` | `/api/v1/audit/logs` | Query audit trail |
 | `POST` | `/api/v1/session/reset` | Reset session tracking (mosaic detection) |
+
+### Example: Login
+
+```powershell
+$response = Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/v1/auth/login `
+    -ContentType "application/json" `
+    -Body '{"username": "sarah.chen", "password": "SarahHR@2024!"}'
+$response.user.roles        # → hr_manager (resolved server-side)
+$response.access_token      # → Bearer token for protected endpoints
+```
 
 ### Example: Analyze Request
 
