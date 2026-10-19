@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contextshield"
+version = "0.1.0"
+description = "Python SDK for the ContextShield privacy gateway (agents only see approved data)."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "ContextShield" }]
+keywords = ["privacy", "ai-agents", "data-protection", "pii", "gateway"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Typing :: Typed",
+]
+dependencies = ["httpx>=0.24"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+
+[project.urls]
+Repository = "https://github.com/yashinkumar192006/DevDynamos"
+Documentation = "https://github.com/yashinkumar192006/DevDynamos/blob/main/docs/integration-guide.md"
+
+[tool.setuptools]
+packages = ["contextshield"]
+
+[tool.setuptools.package-data]
+contextshield = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

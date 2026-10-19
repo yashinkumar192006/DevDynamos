@@ -89,8 +89,18 @@ class Customer(Base):
     credit_card_last4 = Column(String(4), nullable=True)
     account_tier = Column(String(20), default="standard", nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
+    #: Owning user account for self-service access (contact person).
+    #: ``None`` means no login is linked to this customer.
+    user_id = Column(
+        String(32),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
 
     # Relationships
+    user = relationship("User", backref="customer_record")
     orders = relationship("Order", back_populates="customer", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:

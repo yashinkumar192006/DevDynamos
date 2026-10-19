@@ -208,11 +208,34 @@ ContextShield is a **privacy enforcement middleware** that sits between AI agent
 - **Mosaic effect detection**: Tracks cumulative disclosures to prevent re-identification through data combination
 - **Zero external data transfer**: Raw PII is never sent to external LLMs, APIs, or classifier services
 
-### 📊 Audit & Compliance
-- Every privacy decision is logged immutably
-- Logs contain **hashed values only** — never raw sensitive data
-- Full request context preserved for compliance review
-- Dashboard for reviewing access patterns and policy violations
+> Decision semantics, mandatory protection floors, aggregate safeguards,
+> tokenization, and policy administration:
+> [`docs/policy-engine.md`](docs/policy-engine.md)
+
+### 🤖 Safe AI Integration & Output Guard
+- **Provider-independent LLM adapter**: deterministic mock provider by default; optional Gemini behind server-side configuration — the app runs fully offline without a paid API
+- **Minimum-disclosure model context**: the model sees only authorized, post-transformation values — never raw PII, blocked fields, full tables, or unfiltered retrieval
+- **Untrusted-data framing**: retrieved data and prompts can never override authorization, and injected instructions are detected before any model call
+- **Second line of defense**: every model response is scanned for PII re-introduction and redacted, rejected, or escalated per policy — a guard failure never returns an unchecked response
+
+> Provider configuration, guard modes, and fail-closed behaviour:
+> [`docs/llm-integration.md`](docs/llm-integration.md)
+
+### 📊 Audit & Explainability
+- Every gateway decision — human or agent, granted or denied — is recorded immutably
+- Queryable APIs: `GET /api/v1/audit/events` (+ `/{id}`) with filtering, pagination, and full explainability (reason codes, policy versions, transformation types, model-invocation and output-inspection outcome)
+- Visibility-scoped server-side: admins see the full trail, compliance roles the privacy pipeline, everyone else only their own events
+- Records are safe by construction — no raw PII, credentials, tokens, prompts, or model outputs
+
+### 🧩 Python SDK & Integration
+- Typed, dependency-light Python SDK (`sdk/contextshield`) over the same HTTP contract any language can call
+- Credentials from environment variables or a credential provider — never hardcoded; configurable timeouts, controlled error types, safe logging
+- `BLOCK` / `ESCALATION_NEEDED` decisions arrive as first-class typed results with explicit handling (no exceptions required)
+- Runnable integration examples: simple agent, tool/data connector, LLM pre-flight, and generic non-Python HTTP
+
+> Integration contract, patterns, and the honest security boundary:
+> [`docs/integration-guide.md`](docs/integration-guide.md) · runnable examples in
+> [`examples/`](examples/)
 
 ### 🔐 Authentication & Authorization
 - JWT-based authentication (HS256); tokens carry identity only — roles are re-resolved from the database on every request
@@ -368,16 +391,16 @@ This starts PostgreSQL, the backend, and the frontend in containers.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/health` | Health check |
+| `GET` | `/api/v1/health` | Versioned health check |
+| `GET` | `/api/v1/system/status` | System / provider status |
 | `POST` | `/api/v1/auth/login` | Authenticate and receive JWT |
 | `GET` | `/api/v1/auth/me` | Current user profile (roles + permissions) |
 | `GET` | `/api/v1/auth/whoami` | Verified identity (user JWT or service API key) |
 | `POST` | `/api/v1/auth/logout` | Audit-logged logout (client discards token) |
 | `GET` | `/api/v1/admin/users` | List users — requires `admin` role/scope |
-| `POST` | `/api/v1/analyze` | Analyze a data request for privacy compliance |
-| `POST` | `/api/v1/classify` | Classify data fields for sensitivity |
-| `GET` | `/api/v1/policies` | List active privacy policies |
-| `GET` | `/api/v1/audit/logs` | Query audit trail |
-| `POST` | `/api/v1/session/reset` | Reset session tracking (mosaic detection) |
+| `POST` | `/api/v1/privacy/secure-request` | Governed data request: policy evaluation, minimum-disclosure transforms, optional inspected model stage |
+| `GET` | `/api/v1/audit/events` | Query the audit trail (visibility-scoped, filterable, paginated) |
+| `GET` | `/api/v1/audit/events/{id}` | Full explainability for one recorded decision |
 
 ### Example: Login
 
@@ -389,47 +412,44 @@ $response.user.roles        # → hr_manager (resolved server-side)
 $response.access_token      # → Bearer token for protected endpoints
 ```
 
-### Example: Analyze Request
+### Example: Governed Secure Request
+
+```powershell
+$token = (Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/v1/auth/login `
+    -ContentType "application/json" `
+    -Body '{"username": "natalie.brooks", "password": "<seeded demo password>"}').access_token
+
+$result = Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/v1/privacy/secure-request `
+    -Headers @{ Authorization = "Bearer $token" } -ContentType "application/json" `
+    -Body '{
+      "resource": "order_records",
+      "data_fields": ["order_id", "status"],
+      "purpose": "order_status",
+      "target_entity": "ORD0001"
+    }'
+
+$result.overall_decision   # → ALLOW
+$result.fields             # per-field action + already-transformed values
+$result.audit_id           # recorded audit event for this decision
+```
+
+**Blocked request (marketing intern requesting an individual salary):**
 
 ```json
-POST /api/v1/analyze
-Authorization: Bearer <jwt_token>
-
 {
-  "requester_id": "user-123",
-  "data_fields": ["employee_name", "salary", "department"],
-  "purpose": "quarterly_performance_review",
-  "target_entity": "employee-456"
+  "overall_decision": "BLOCK",
+  "fields": { "base_salary": { "action": "BLOCK", "value": null, "reason_code": "INSUFFICIENT_ROLE" } },
+  "records": null,
+  "retrieved": false,
+  "llm_response": null,
+  "audit_id": "…"
 }
 ```
 
-**Response (authorized HR manager):**
-```json
-{
-  "decision": "PARTIAL_ALLOW",
-  "fields": {
-    "employee_name": { "action": "ALLOW", "value": "Jane Smith" },
-    "salary": { "action": "ALLOW", "value": 95000 },
-    "department": { "action": "ALLOW", "value": "Engineering" }
-  },
-  "policy_applied": "hr_salary_review_norm",
-  "audit_id": "aud-789"
-}
-```
-
-**Response (unauthorized peer employee):**
-```json
-{
-  "decision": "PARTIAL_DENY",
-  "fields": {
-    "employee_name": { "action": "ALLOW", "value": "Jane Smith" },
-    "salary": { "action": "DENY", "reason": "Salary data requires HR role with review purpose" },
-    "department": { "action": "ALLOW", "value": "Engineering" }
-  },
-  "policy_applied": "default_employee_norm",
-  "audit_id": "aud-790"
-}
-```
+A `BLOCK` is an HTTP 200 **decision** — normal, enforced, and audited; only
+malformed requests or credential failures are HTTP errors. The Python SDK
+returns decisions as typed results (`result.blocked`), never as exceptions —
+see [`docs/integration-guide.md`](docs/integration-guide.md).
 
 ---
 

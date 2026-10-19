@@ -46,8 +46,8 @@ v1 does not implement refresh tokens. Users must re-authenticate when the token 
 | `GET /api/v1/auth/me`                 | Yes           | Any authenticated  |
 | `POST /api/v1/privacy/secure-request` | Yes           | Any authenticated  |
 | `GET /api/v1/policies`                | Yes           | Any authenticated  |
-| `GET /api/v1/audit/events`            | Yes           | `hr_manager`, `executive`, `admin` |
-| `GET /api/v1/audit/events/{id}`       | Yes           | `hr_manager`, `executive`, `admin` |
+| `GET /api/v1/audit/events`            | Yes           | Any authenticated (visibility-scoped — see §4.8) |
+| `GET /api/v1/audit/events/{id}`       | Yes           | Any authenticated (visibility-scoped — see §4.9) |
 | `GET /api/v1/dashboard/overview`      | Yes           | Any authenticated  |
 | `GET /api/v1/data/assets`             | Yes           | Any authenticated  |
 
@@ -358,6 +358,34 @@ Query parameters: `?limit=20&offset=0`
 | Any field ESCALATE                          | `ESCALATION_NEEDED`|
 | Evaluation error                            | `BLOCK`            |
 
+**Implementation notes (v1):**
+
+* `resource` is a **required** request field: the catalog resource being
+  addressed (`employee_salary`, `order_records`, …). The example above is
+  from the original design draft; the implemented contract addresses data by
+  resource + field, not by implicit field lookup.
+* `operation` is limited to `read` and `aggregate` — the two operations the
+  minimum-disclosure pipeline implements.
+* Destinations are **not client-settable**; `context` carries correlation
+  metadata only (`session_id`, `conversation_id`, `task_id`, `turn_index`,
+  `agent_name`, scalar `additional_claims`). Claims that look like identity
+  or authorization (`role`, `permissions`, …) are dropped at the edge and
+  never influence decisions.
+* Responses add the structured fields the SDK consumes: top-level
+  `reason_code`/`reason`, `retrieved`, and — when `include_llm_response` is
+  set — an `llm` object (`requested`, `invoked`, `provider`, `model`,
+  `error_code`, `error`, `guard`). Guard findings carry category/rule/span
+  metadata only, never the matched text.
+* Shape/validation problems return `422`; everything semantic (unknown
+  resource, unauthorized target, invalid purpose, policy denial) is a
+  fail-closed **200** with `BLOCK`/`ESCALATION_NEEDED` and per-field reason
+  codes.
+* When the output guard flags model output, `guard_triggered` is set and the
+  response follows `LLM_OUTPUT_GUARD_MODE` (redact/reject/escalate). A guard
+  failure withholds the output entirely (`GUARD_ERROR`). See
+  [llm-integration.md](llm-integration.md) for provider configuration and
+  guard semantics.
+
 ---
 
 ### 4.7 `GET /api/v1/policies`
@@ -403,118 +431,179 @@ Query parameters: `?limit=20&offset=0`
 
 ---
 
-### 4.8 `GET /api/v1/audit/events`
+### 4.8 `GET /api/v1/audit/events` — implemented
 
-**Purpose:** Query the audit trail. Restricted to compliance-authorized roles.
+**Purpose:** Query the audit trail. Visibility is derived server-side from the
+**verified principal only** (never from query parameters):
 
-**Headers:** `Authorization: Bearer <token>`
+| Principal | Visible slice of the trail |
+|---|---|
+| `admin` role, or a service account holding `*` / `role:admin` | Complete trail — all actors, all action classes |
+| `hr_manager` / `executive`, or `role:hr_manager` / `role:executive` service scopes | Privacy-pipeline events for all actors: `data_access`, `data_denied`, `policy_evaluation`, `transformation`, `ai_query`, `output_inspection` |
+| Every other authenticated principal (human or agent) | **Own** events only, all action classes |
 
-**Required Role:** `hr_manager`, `executive`, or `admin`
+Scope is enforced in SQL (`actor_id` / `action IN (…)` constraints), so
+out-of-scope rows are never loaded. An explicit **out-of-scope filter** (e.g.
+`requester_id=<someone else>` for an own-scope principal, or an authentication
+action for a compliance-role principal) is rejected with **403**; a direct
+fetch of an out-of-scope event returns **404** (§4.9) so event existence is
+not disclosed.
+
+**Headers:** `Authorization: Bearer <token>` or `X-API-Key: <service key>`
 
 **Query Parameters:**
-| Parameter       | Type     | Default  | Description                         |
-|-----------------|----------|----------|-------------------------------------|
-| `limit`         | int      | 20       | Items per page (1–100)              |
-| `offset`        | int      | 0        | Pagination offset                   |
-| `requester_id`  | string   | —        | Filter by requester                 |
-| `decision`      | string   | —        | Filter by overall_decision          |
-| `start_date`    | datetime | —        | Events after this timestamp         |
-| `end_date`      | datetime | —        | Events before this timestamp        |
+| Parameter       | Type     | Default  | Description |
+|-----------------|----------|----------|-------------|
+| `limit`         | int      | 20       | Items per page (1–100) |
+| `offset`        | int      | 0        | Pagination offset |
+| `requester_id`  | string   | —        | Filter by actor id (users *and* agents) |
+| `action`        | string   | —        | `login`, `logout`, `data_access`, `data_denied`, `policy_evaluation`, `transformation`, `ai_query`, `output_inspection`, `admin_action`, `seed_data` |
+| `resource`      | string   | —        | Filter by catalog resource (e.g. `employee_salary`) |
+| `outcome`       | string   | —        | `success`, `denied`, `escalated`, `failed`, `passed`, `flagged` |
+| `session_id`    | string   | —        | Correlation id supplied with the secure request |
+| `start_date`    | datetime | —        | Events at/after this timestamp (ISO 8601) |
+| `end_date`      | datetime | —        | Events at/before this timestamp (ISO 8601) |
+
+Invalid shapes (unknown action, `limit > 100`, `start_date > end_date`) → 422.
 
 **Response (200):**
 ```json
 {
   "items": [
     {
-      "id": "aud-789e8400-e29b-41d4-a716-446655440000",
-      "timestamp": "2026-10-18T11:30:00.123Z",
-      "request_id": "req-550e8400-e29b-41d4-a716-446655440000",
-      "requester_id": "550e8400-e29b-41d4-a716-446655440000",
-      "requester_role": "hr_manager",
-      "target_entity_id": "employee-456",
-      "purpose_claimed": "performance_review",
-      "purpose_verified": true,
-      "overall_decision": "PARTIAL_ALLOW",
-      "fields_requested": ["employee_name", "salary", "department", "email"],
-      "guard_triggered": false,
-      "decisions_summary": {
-        "ALLOW": 3,
-        "MASK": 1,
-        "BLOCK": 0
-      }
+      "id": "9a0d1f7c5e2b4a8d93c1f0e6b7a2d4c8",
+      "timestamp": "2026-10-19T11:30:00.123456+00:00",
+      "action": "data_denied",
+      "outcome": "denied",
+      "actor": {
+        "id": "3b7c9d1e5f2a4b8c6d0e9f1a2b3c4d5e",
+        "kind": "user",
+        "name": "Mia Torres",
+        "roles": ["marketing_intern"],
+        "scopes": []
+      },
+      "request_id": "8f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "session_id": "sess-abc123",
+      "resource": "employee_salary",
+      "resource_id": "EMP002",
+      "overall_decision": "BLOCK",
+      "reason_codes": ["INSUFFICIENT_ROLE"],
+      "policy_versions": [4],
+      "sensitivity_categories": ["financial"],
+      "model_requested": false,
+      "model_invoked": false,
+      "guard_outcome": null,
+      "mosaic_warning": false
     }
   ],
-  "pagination": {
-    "total": 142,
-    "limit": 20,
-    "offset": 0,
-    "has_more": true
+  "pagination": { "total": 142, "limit": 20, "offset": 0, "has_more": true }
+}
+```
+
+**Recorded content is safe by construction.** Events never store raw protected
+values, passwords, API keys, JWTs, purpose free text, prompts, or model
+outputs. `actor` identity (name/roles/scopes) is re-resolved from the database
+at read time; `requester` in the detail response (§4.9) is the snapshot
+verified at request time.
+
+**Implementation:** `app/api/v1/audit.py`, `app/services/audit_service.py`,
+`app/schemas/audit.py`; events are written by
+`app/services/data_connector.py` (`_persist`) for both human and agent
+principals (`audit_events.actor_kind` = `"user"` | `"service"`).
+
+---
+
+### 4.9 `GET /api/v1/audit/events/{id}` — implemented
+
+**Purpose:** Full explainability for one event: per-field decisions, reason
+codes, policy versions, transformation types, and model-stage metadata.
+
+**Headers:** `Authorization: Bearer <token>` or `X-API-Key: <service key>`
+
+**Visibility:** the same scopes as §4.8: admins read any event; compliance
+roles read privacy-pipeline events; every other principal reads only its own.
+A missing **or out-of-scope** id returns **404** (existence is not revealed).
+
+**Response (200):** the §4.8 list-item projection plus:
+
+```json
+{
+  "id": "9a0d1f7c5e2b4a8d93c1f0e6b7a2d4c8",
+  "timestamp": "2026-10-19T11:30:00.123456+00:00",
+  "action": "data_access",
+  "outcome": "success",
+  "actor": {
+    "id": "3b7c9d1e5f2a4b8c6d0e9f1a2b3c4d5e",
+    "kind": "service",
+    "name": "support-copilot",
+    "roles": [],
+    "scopes": ["privacy:request", "customer_records:read"]
+  },
+  "request_id": "8f1e2d3c4b5a69788796a5b4c3d2e1f0",
+  "session_id": "sess-abc123",
+  "resource": "customer_records",
+  "resource_id": "CUS003",
+  "overall_decision": "PARTIAL_ALLOW",
+  "reason_codes": ["NORM_MATCHED"],
+  "policy_versions": [2],
+  "sensitivity_categories": ["contact"],
+  "model_requested": true,
+  "model_invoked": true,
+  "guard_outcome": "none",
+  "mosaic_warning": false,
+  "purpose": "customer_service",
+  "purpose_recognized": true,
+  "operation": "read",
+  "subject_scope": "record",
+  "flags": [],
+  "requested_fields": ["contact_email", "contact_phone"],
+  "decisions": [
+    {
+      "field": "contact_email",
+      "action": "MASK",
+      "reason_code": "NORM_MATCHED",
+      "policy_id": "P-support-contact",
+      "policy_version": 2,
+      "sensitivity": "high",
+      "pii_category": "contact"
+    }
+  ],
+  "transformations": [
+    { "field": "contact_email", "transformation": "mask" }
+  ],
+  "llm": {
+    "requested": true,
+    "invoked": true,
+    "provider": "mock",
+    "model": "mock-deterministic",
+    "guard_triggered": false,
+    "guard_action": "none",
+    "guard_reason_code": null,
+    "error_code": null
+  },
+  "guard_triggered": false,
+  "correlation": { "session_id": "sess-abc123", "agent_name": "support-copilot" },
+  "ip_address": null,
+  "requester": {
+    "id": "3b7c9d1e5f2a4b8c6d0e9f1a2b3c4d5e",
+    "kind": "service",
+    "name": "support-copilot",
+    "roles": [],
+    "scopes": ["privacy:request", "customer_records:read"],
+    "authentication": "api_key"
+  },
+  "agent": {
+    "id": "3b7c9d1e5f2a4b8c6d0e9f1a2b3c4d5e",
+    "kind": "service_account",
+    "name": "support-copilot",
+    "scopes": ["privacy:request", "customer_records:read"]
   }
 }
 ```
 
----
-
-### 4.9 `GET /api/v1/audit/events/{id}`
-
-**Purpose:** Get full details of a specific audit event.
-
-**Headers:** `Authorization: Bearer <token>`
-
-**Required Role:** `hr_manager`, `executive`, or `admin`
-
-**Response (200):**
-```json
-{
-  "id": "aud-789e8400-e29b-41d4-a716-446655440000",
-  "timestamp": "2026-10-18T11:30:00.123Z",
-  "request_id": "req-550e8400-e29b-41d4-a716-446655440000",
-  "requester_id": "550e8400-e29b-41d4-a716-446655440000",
-  "requester_role": "hr_manager",
-  "requester_department": "Human Resources",
-  "target_entity_id": "employee-456",
-  "purpose_claimed": "performance_review",
-  "purpose_verified": true,
-  "overall_decision": "PARTIAL_ALLOW",
-  "decisions": [
-    {
-      "field": "employee_name",
-      "action": "ALLOW",
-      "reason_code": "NORM_MATCHED",
-      "policy_id": "P-hr-salary-review",
-      "policy_version": 2,
-      "value_hash": "a1b2c3d4..."
-    },
-    {
-      "field": "salary",
-      "action": "ALLOW",
-      "reason_code": "NORM_MATCHED",
-      "policy_id": "P-hr-salary-review",
-      "policy_version": 2,
-      "value_hash": "e5f6g7h8..."
-    },
-    {
-      "field": "department",
-      "action": "ALLOW",
-      "reason_code": "NORM_MATCHED",
-      "policy_id": "P-hr-salary-review",
-      "policy_version": 2,
-      "value_hash": "i9j0k1l2..."
-    },
-    {
-      "field": "email",
-      "action": "MASK",
-      "reason_code": "NORM_MATCHED",
-      "policy_id": "P-hr-contact-masked",
-      "policy_version": 1,
-      "value_hash": "m3n4o5p6..."
-    }
-  ],
-  "guard_triggered": false,
-  "mosaic_warning": false,
-  "session_id": "sess-abc123"
-}
-```
+`POST /api/v1/privacy/secure-request` returns the same event id as
+`audit_id`, so a caller can always correlate the decision it received with
+the recorded trail entry.
 
 ---
 

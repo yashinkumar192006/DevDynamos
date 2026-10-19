@@ -20,8 +20,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import PrivacyPolicy, RequestPurpose
 from app.repositories import (
+    CustomerRepository,
     DataFieldRepository,
     EmployeeRepository,
+    OrderRepository,
     PrivacyPolicyRepository,
     UserRepository,
 )
@@ -29,6 +31,25 @@ from app.services.auth_service import Principal
 
 #: Operations recognised when expanding wildcard permissions/scopes.
 KNOWN_OPERATIONS = ("read", "write", "delete", "aggregate", "export")
+
+#: Assets whose records are linked to a user via ``employees.user_id``.
+#: Shared with the context analyzer so ownership semantics live in one place.
+PERSONAL_ASSETS = ("employee_records", "employee_salary", "employee_contact")
+
+#: Every asset whose records carry a per-user ownership link. Employee
+#: assets resolve through ``employees.user_id``; customer accounts through
+#: ``customers.user_id`` and orders through their customer. Self-service
+#: reads (role-less policies) are only ever granted on an ownership match.
+OWNERSHIP_ASSETS = PERSONAL_ASSETS + ("customer_records", "order_records")
+
+#: Assets where record ownership alone can pass the operation-level
+#: (RBAC) pre-check for a *user* principal. The external ``customer`` role
+#: holds no standing permissions by design, so its self-service reads are
+#: granted per-record from the trusted link; the deterministic policy
+#: engine still applies per-field norms (role-less self-service policies).
+#: Internal employee assets keep the RBAC gate: ownership there only scopes
+#: rows/fields and never substitutes for a permission.
+SELF_SERVICE_OWNERSHIP_ASSETS = ("customer_records", "order_records")
 
 
 @dataclass(frozen=True)
@@ -75,8 +96,9 @@ def _json_list(raw: str | None) -> list[str]:
 class AuthorizationService:
     """Reusable authorization checks against trusted database state."""
 
-    #: Assets whose records are linked to a user via ``employees.user_id``.
-    _PERSONAL_ASSETS = ("employee_records", "employee_salary", "employee_contact")
+    #: Assets whose records carry a per-user ownership link.
+    _PERSONAL_ASSETS = PERSONAL_ASSETS
+    _OWNERSHIP_ASSETS = OWNERSHIP_ASSETS
 
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -205,10 +227,11 @@ class AuthorizationService:
     ) -> AccessDecision:
         """Is this identity the owner of the referenced record?
 
-        Ownership is resolved from the trusted ``employees.user_id`` link —
-        never from request-supplied fields. Only user principals can own
-        personal records. Ownership and RBAC are independent: a self-service
-        read requires the ownership match, not a broad permission.
+        Ownership is resolved from trusted links only — ``employees.user_id``
+        for employee assets, ``customers.user_id`` for customer accounts and
+        (through their customer) for orders. Only user principals can own
+        records. Ownership and RBAC are independent: a self-service read
+        requires the ownership match, not a broad permission.
         """
         if principal.kind != "user":
             return AccessDecision(
@@ -216,20 +239,56 @@ class AuthorizationService:
                 "NOT_OWNER",
                 "Service principals cannot own personal records",
             )
-        if asset_name not in self._PERSONAL_ASSETS:
+        if asset_name not in self._OWNERSHIP_ASSETS:
             return AccessDecision(
                 False,
                 "OWNERSHIP_NOT_APPLICABLE",
                 f"No ownership link is defined for '{asset_name}'",
             )
-        employee = await EmployeeRepository(self.session).get_by_employee_number(
-            record_key
-        )
-        if employee is None:
-            return AccessDecision(
-                False, "RECORD_NOT_FOUND", f"Record '{record_key}' does not exist"
+
+        owner_id: str | None = None
+        if asset_name in self._PERSONAL_ASSETS:
+            employee = await EmployeeRepository(self.session).get_by_employee_number(
+                record_key
             )
-        if employee.user_id == principal.id:
+            if employee is None:
+                return AccessDecision(
+                    False,
+                    "RECORD_NOT_FOUND",
+                    f"Record '{record_key}' does not exist",
+                )
+            owner_id = employee.user_id
+        elif asset_name == "customer_records":
+            customer = await CustomerRepository(self.session).get_by_customer_number(
+                record_key
+            )
+            if customer is None:
+                return AccessDecision(
+                    False,
+                    "RECORD_NOT_FOUND",
+                    f"Record '{record_key}' does not exist",
+                )
+            owner_id = customer.user_id
+        elif asset_name == "order_records":
+            order = await OrderRepository(self.session).get_by_order_number(record_key)
+            if order is None:
+                return AccessDecision(
+                    False,
+                    "RECORD_NOT_FOUND",
+                    f"Record '{record_key}' does not exist",
+                )
+            customer = await CustomerRepository(self.session).get_by_id(
+                order.customer_id
+            )
+            owner_id = customer.user_id if customer is not None else None
+        else:  # pragma: no cover — defensive: unknown ownership asset
+            return AccessDecision(
+                False,
+                "OWNERSHIP_NOT_APPLICABLE",
+                f"No ownership resolver for '{asset_name}'",
+            )
+
+        if owner_id is not None and owner_id == principal.id:
             return AccessDecision(
                 True, "OWNER_MATCH", f"Identity owns record '{record_key}'"
             )

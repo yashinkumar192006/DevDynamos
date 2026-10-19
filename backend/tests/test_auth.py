@@ -706,8 +706,12 @@ async def test_purpose_restrictions(session):
     assert not d.allowed
 
     # Resource with no active policy — fail closed.
-    d = await authz.check_purpose(sarah, "employee_records", "hr_review")
+    d = await authz.check_purpose(sarah, "nonexistent_dataset", "hr_review")
     assert not d.allowed and d.reason_code == "NO_POLICY_FOR_RESOURCE"
+
+    # employee_records gained self-service coverage in phase 7.
+    d = await authz.check_purpose(lisa, "employee_records", "general")
+    assert d.allowed and d.reason_code == "PURPOSE_ALLOWED"
 
     # Unknown purposes are rejected outright.
     d = await authz.check_purpose(sarah, "employee_salary", "just_because")

@@ -35,9 +35,16 @@ class PrivacyPolicy(Base):
     policy_text = Column(Text, nullable=False)
     resource_pattern = Column(String(200), nullable=False)  # e.g. "employee_salary", "customer_*"
     required_role = Column(String(100), nullable=True)
-    min_sensitivity = Column(String(20), nullable=True)  # sensitivity threshold
+    min_sensitivity = Column(String(20), nullable=True)  # maximum sensitivity this norm may expose
     allowed_purposes = Column(Text, nullable=True)  # JSON list
-    allowed_actions = Column(Text, nullable=True)  # JSON list
+    allowed_actions = Column(Text, nullable=True)  # JSON list of request operations
+    # Disclosure action this norm authorises when it matches:
+    # ALLOW | MASK | TOKENIZE | GENERALIZE | AGGREGATE | ESCALATE | BLOCK.
+    # NULL means a legacy read policy — treated as ALLOW by the engine.
+    action = Column(String(20), nullable=True)
+    # Conflict resolution: higher priority wins; ties fall back to the most
+    # restrictive action (see docs/privacy-policies.md §4.2).
+    priority = Column(Integer, nullable=False, default=0, server_default="0")
     status = Column(
         SAEnum(PolicyStatus, name="policy_status"),
         default=PolicyStatus.ACTIVE,

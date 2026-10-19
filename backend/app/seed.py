@@ -186,6 +186,15 @@ USERS = [
         "password": "MiaIntern@2024!",
         "roles": ["marketing_intern"],
     },
+    {
+        "username": "natalie.brooks",
+        "email": "natalie.brooks@acme-robotics.example",
+        "full_name": "Natalie Brooks",
+        "department": "Acme Robotics",
+        "employee_id": None,
+        "password": "NatalieCust@2024!",
+        "roles": ["customer"],
+    },
 ]
 
 PERMISSIONS = {
@@ -384,6 +393,8 @@ POLICIES = [
         "min_sensitivity": "restricted",
         "allowed_purposes": json.dumps(["hr_review"]),
         "allowed_actions": json.dumps(["read"]),
+        "action": "ALLOW",
+        "priority": 100,
         "status": "active",
     },
     {
@@ -399,6 +410,8 @@ POLICIES = [
         "min_sensitivity": "high",
         "allowed_purposes": json.dumps(["department_statistics", "analytics"]),
         "allowed_actions": json.dumps(["aggregate"]),
+        "action": "AGGREGATE",
+        "priority": 80,
         "status": "active",
     },
     {
@@ -414,6 +427,8 @@ POLICIES = [
         "min_sensitivity": "high",
         "allowed_purposes": json.dumps(["hr_review"]),
         "allowed_actions": json.dumps(["read"]),
+        "action": "ALLOW",
+        "priority": 60,
         "status": "active",
     },
     {
@@ -429,6 +444,8 @@ POLICIES = [
         "min_sensitivity": "high",
         "allowed_purposes": json.dumps(["customer_service", "order_status"]),
         "allowed_actions": json.dumps(["read"]),
+        "action": "ALLOW",
+        "priority": 60,
         "status": "active",
     },
     {
@@ -444,6 +461,8 @@ POLICIES = [
         "min_sensitivity": "high",
         "allowed_purposes": json.dumps(["customer_service"]),
         "allowed_actions": json.dumps(["read"]),
+        "action": "ALLOW",
+        "priority": 70,
         "status": "active",
     },
     {
@@ -459,6 +478,8 @@ POLICIES = [
         "min_sensitivity": "restricted",
         "allowed_purposes": json.dumps(["compliance", "analytics"]),
         "allowed_actions": json.dumps(["read"]),
+        "action": "ALLOW",
+        "priority": 60,
         "status": "active",
     },
     {
@@ -474,6 +495,99 @@ POLICIES = [
         "min_sensitivity": "restricted",
         "allowed_purposes": json.dumps(["hr_review", "compliance"]),
         "allowed_actions": json.dumps(["read"]),
+        "action": "ALLOW",
+        "priority": 100,
+        "status": "active",
+    },
+    {
+        "name": "customer_support_policy",
+        "version": 1,
+        "description": "Support agents may read customer contact data for service purposes",
+        "policy_text": (
+            "Support agents may access customer contact information while handling "
+            "service requests. Mandatory protection rules still mask third-party "
+            "phone numbers and email addresses."
+        ),
+        "resource_pattern": "customer_records",
+        "required_role": "support_agent",
+        "min_sensitivity": "high",
+        "allowed_purposes": json.dumps(["customer_service", "order_status"]),
+        "allowed_actions": json.dumps(["read"]),
+        "action": "ALLOW",
+        "priority": 50,
+        "status": "active",
+    },
+    {
+        "name": "order_status_policy",
+        "version": 1,
+        "description": "Order status and non-sensitive order details for support/sales",
+        "policy_text": (
+            "Support and sales staff may read order status, dates and totals. "
+            "Shipping addresses remain above this policy's sensitivity ceiling."
+        ),
+        "resource_pattern": "order_records",
+        "required_role": "support_agent",
+        "min_sensitivity": "medium",
+        "allowed_purposes": json.dumps(["order_status", "customer_service"]),
+        "allowed_actions": json.dumps(["read"]),
+        "action": "ALLOW",
+        "priority": 50,
+        "status": "active",
+    },
+    {
+        "name": "employee_self_service_policy",
+        "version": 1,
+        "description": "Employees may read their own non-sensitive profile fields",
+        "policy_text": (
+            "Any authenticated employee may view their own basic profile "
+            "(name, email, department, title, hire date). The engine enforces "
+            "that the target record is the requester's own (SELF_ACCESS_ONLY)."
+        ),
+        "resource_pattern": "employee_records",
+        "required_role": None,
+        "min_sensitivity": "medium",
+        "allowed_purposes": json.dumps(["general"]),
+        "allowed_actions": json.dumps(["read"]),
+        "action": "ALLOW",
+        "priority": 10,
+        "status": "active",
+    },
+    {
+        "name": "employee_records_hr_policy",
+        "version": 1,
+        "description": "HR staff may read employee profile fields for HR review",
+        "policy_text": (
+            "HR staff may read non-SSN employee profile fields while conducting "
+            "HR reviews. SSN remains blocked unconditionally, and mandatory "
+            "protection floors still mask phone/email and generalize addresses."
+        ),
+        "resource_pattern": "employee_records",
+        "required_role": "hr_staff",
+        "min_sensitivity": "high",
+        "allowed_purposes": json.dumps(["hr_review"]),
+        "allowed_actions": json.dumps(["read"]),
+        "action": "ALLOW",
+        "priority": 50,
+        "status": "active",
+    },
+    {
+        "name": "customer_self_service_policy",
+        "version": 1,
+        "description": "Customers may read their own order status",
+        "policy_text": (
+            "An external customer contact may read order status, dates and "
+            "totals for their own orders only. The engine enforces that the "
+            "target record belongs to the authenticated customer "
+            "(SELF_ACCESS_ONLY). Shipping addresses remain above the "
+            "sensitivity ceiling."
+        ),
+        "resource_pattern": "order_records",
+        "required_role": None,
+        "min_sensitivity": "medium",
+        "allowed_purposes": json.dumps(["order_status"]),
+        "allowed_actions": json.dumps(["read"]),
+        "action": "ALLOW",
+        "priority": 20,
         "status": "active",
     },
 ]
@@ -632,7 +746,7 @@ CUSTOMERS = [
     {"customer_number": "CUS001", "company_name": "Acme Robotics", "contact_name": "Natalie Brooks",
      "contact_email": "natalie.brooks@acme-robotics.example", "contact_phone": "+1-555-0201",
      "billing_address": "500 Innovation Drive, Austin, TX 78701", "credit_card_last4": "4242",
-     "account_tier": "enterprise", "is_active": True},
+     "account_tier": "enterprise", "is_active": True, "user": "natalie.brooks"},
     {"customer_number": "CUS002", "company_name": "Globex Manufacturing", "contact_name": "Victor Okafor",
      "contact_email": "victor.okafor@globex-mfg.example", "contact_phone": "+1-555-0202",
      "billing_address": "1200 Foundry Road, Detroit, MI 48201", "credit_card_last4": "1881",
@@ -900,7 +1014,7 @@ async def seed_policies(session: AsyncSession):
                 prev.status = PolicyStatus.SUPERSEDED
                 print(f"  ↻ Superseded: {p['name']} v{p['version'] - 1}")
 
-        _, created = await _get_or_create(
+        policy, created = await _get_or_create(
             session,
             PrivacyPolicy,
             {
@@ -911,6 +1025,8 @@ async def seed_policies(session: AsyncSession):
                 "min_sensitivity": p.get("min_sensitivity"),
                 "allowed_purposes": p.get("allowed_purposes"),
                 "allowed_actions": p.get("allowed_actions"),
+                "action": p.get("action"),
+                "priority": p.get("priority", 0),
                 "status": status,
             },
             name=p["name"],
@@ -918,6 +1034,19 @@ async def seed_policies(session: AsyncSession):
         )
         if created:
             print(f"  ✓ Policy: {p['name']} v{p['version']} [{p['status']}]")
+        else:
+            # Keep existing rows in sync with the definition (action /
+            # priority were added after the first release).
+            changed = False
+            if policy.action != p.get("action"):
+                policy.action = p.get("action")
+                changed = True
+            if p.get("priority", 0) != policy.priority:
+                policy.priority = p.get("priority", 0)
+                changed = True
+            if changed:
+                print(f"  ↻ Updated: {p['name']} v{p['version']} "
+                      f"(action={p.get('action')}, priority={p.get('priority', 0)})")
 
 
 async def seed_employees(session: AsyncSession, user_map: dict[str, User]) -> dict[str, Employee]:
@@ -963,10 +1092,11 @@ async def seed_employees(session: AsyncSession, user_map: dict[str, User]) -> di
     return employee_map
 
 
-async def seed_customers(session: AsyncSession) -> dict[str, Customer]:
-    """Seed synthetic customer records."""
+async def seed_customers(session: AsyncSession, user_map: dict[str, User]) -> dict[str, Customer]:
+    """Seed synthetic customer records and link owning user accounts."""
     customer_map: dict[str, Customer] = {}
     for c in CUSTOMERS:
+        user = user_map.get(c.get("user")) if c.get("user") else None
         customer, created = await _get_or_create(
             session,
             Customer,
@@ -979,12 +1109,18 @@ async def seed_customers(session: AsyncSession) -> dict[str, Customer]:
                 "credit_card_last4": c["credit_card_last4"],
                 "account_tier": c["account_tier"],
                 "is_active": c["is_active"],
+                "user_id": user.id if user else None,
             },
             customer_number=c["customer_number"],
         )
         customer_map[c["customer_number"]] = customer
         if created:
             print(f"  ✓ Customer: {c['customer_number']} {c['company_name']}")
+        elif user is not None and customer.user_id != user.id:
+            # Keep the ownership link in sync for databases seeded before
+            # the customers.user_id migration.
+            customer.user_id = user.id
+            print(f"    ↳ {c['customer_number']} linked to user '{c['user']}'")
     return customer_map
 
 
@@ -1082,7 +1218,7 @@ async def run_seed():
             await seed_employees(session, user_map)
 
             print("\n[7/10] Seeding customers …")
-            customer_map = await seed_customers(session)
+            customer_map = await seed_customers(session, user_map)
 
             print("\n[8/10] Seeding orders …")
             await seed_orders(session, customer_map)

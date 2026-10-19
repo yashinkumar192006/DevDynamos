@@ -1,41 +1,41 @@
 # ContextShield — Development Roadmap
 
-> **Version:** 1.0.0  
-> **Status:** Draft — Pre-implementation  
-> **Last Updated:** 2026-10-18
+> **Version:** 1.1.0  
+> **Status:** Reflects implemented Prompts 1–9 (backend, pipeline, audit APIs, SDK, examples)  
+> **Last Updated:** 2026-10-19
 
 ---
 
 ## 1. Current State Assessment
 
-### What Exists (as of 2026-10-18)
+### What Exists (as of 2026-10-19)
 
 | Component                     | Status           | Details                                    |
 |-------------------------------|------------------|--------------------------------------------|
 | **Repository structure**      | ✅ Complete       | All directories, `.gitignore`, `.env.example` |
 | **Docker Compose**            | ✅ Complete       | PostgreSQL + backend + frontend services   |
 | **Backend Dockerfile**        | ✅ Complete       | Python 3.12, spaCy model download          |
-| **CI pipeline**               | ✅ Complete       | GitHub Actions: backend tests + frontend lint |
-| **FastAPI app skeleton**      | ✅ Minimal        | `main.py` with `GET /health` only          |
+| **CI pipeline**               | ✅ Complete       | GitHub Actions: backend tests + SDK tests + frontend lint |
+| **FastAPI app skeleton**      | ✅ Complete       | Full versioned API: auth, admin, privacy pipeline, audit, system status |
 | **Backend dependencies**      | ✅ Complete       | `requirements.txt` with all core deps      |
 | **Frontend scaffold**         | ✅ Scaffold       | Vite + React + TypeScript default app      |
-| **Backend modules**           | 🔲 Empty stubs   | Empty `__init__.py` in all subdirectories  |
-| **Database models**           | 🔲 Not started   | No ORM models defined                      |
-| **Alembic migrations**        | 🔲 Not started   | Alembic directory exists, no migrations    |
-| **Authentication**            | 🔲 Not started   | JWT deps installed, no implementation      |
-| **Classifier service**        | 🔲 Not started   | Presidio deps installed, no implementation |
-| **Context analyzer**          | 🔲 Not started   | No implementation                          |
-| **Policy engine**             | 🔲 Not started   | No implementation                          |
-| **Data connector**            | 🔲 Not started   | No implementation                          |
-| **Transformer**               | 🔲 Not started   | No implementation                          |
-| **LLM adapter**               | 🔲 Not started   | No implementation                          |
-| **Output guard**              | 🔲 Not started   | No implementation                          |
-| **Audit service**             | 🔲 Not started   | No implementation                          |
-| **Privacy pipeline**          | 🔲 Not started   | No implementation                          |
-| **SDK**                       | 🔲 Not started   | Empty directory                            |
+| **Backend modules**           | ✅ Complete       | Layered API / schemas / services / repositories / models |
+| **Database models**           | ✅ Complete       | ORM models + Alembic migrations (`docs/database-design.md`) |
+| **Alembic migrations**        | ✅ Complete       | Schema + audit actor-kind migration; upgrade/downgrade verified |
+| **Authentication**            | ✅ Complete       | JWT + service-account API keys, server-side RBAC |
+| **Classifier service**        | ✅ Complete       | Hybrid classifier (deterministic rules + optional NLP) |
+| **Context analyzer**          | ✅ Complete       | Verified requester, purpose validation, injection flags |
+| **Policy engine**             | ✅ Complete       | Deterministic norm-matched decisions + reason codes |
+| **Data connector**            | ✅ Complete       | 12-step secure-request pipeline, fail-closed |
+| **Transformer**               | ✅ Complete       | Mask/tokenize/generalize/aggregate with audit hashes |
+| **LLM adapter**               | ✅ Complete       | Mock default; optional Gemini (server-side env only) |
+| **Output guard**              | ✅ Complete       | Redact/reject/escalate; never returns unchecked output |
+| **Audit service**             | ✅ Complete       | Polymorphic actors (user/service), scoped query APIs, explainability |
+| **Privacy pipeline**          | ✅ Complete       | Blocked requests: no retrieval, no model call — always audited |
+| **SDK**                       | ✅ Complete       | Typed `contextshield` client, packaging, tests (see `sdk/`) |
 | **Frontend UI**               | 🔲 Not started   | Default Vite scaffold only                 |
-| **E2E tests**                 | 🔲 Not started   | Empty directory                            |
-| **Documentation**             | ✅ Complete       | All 9 specification documents              |
+| **E2E tests**                 | 🔲 Not started   | Backend integration suites complete; root `tests/` still empty |
+| **Documentation**             | ✅ Complete       | All 9 specification documents + integration guide & runnable examples |
 
 ---
 

@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AuditEvent, AuditAction
@@ -72,11 +72,78 @@ class AuditRepository(BaseRepository[AuditEvent]):
         result = await self.session.execute(stmt)
         return result.scalars().all()
 
+    async def query_events(
+        self,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        actor_id: str | None = None,
+        actor_kind: str | None = None,
+        action: AuditAction | None = None,
+        actions_in: Sequence[AuditAction] | None = None,
+        resource: str | None = None,
+        outcome: str | None = None,
+        session_id: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> tuple[Sequence[AuditEvent], int]:
+        """Filtered, paginated audit query returning ``(rows, total)``.
+
+        ``actor_kind`` / ``actions_in`` express *visibility scopes* that the
+        caller (the audit service) derives from the verified principal and
+        applies in SQL — never as post-filtering, so out-of-scope rows are
+        never even loaded.
+        """
+        conditions = []
+        if actor_id is not None:
+            conditions.append(AuditEvent.actor_id == actor_id)
+        if actor_kind is not None:
+            if actor_kind == "user":
+                # Legacy pre-actor-kind rows are user actors.
+                conditions.append(
+                    or_(
+                        AuditEvent.actor_kind == "user",
+                        AuditEvent.actor_kind.is_(None),
+                    )
+                )
+            else:
+                conditions.append(AuditEvent.actor_kind == actor_kind)
+        if action is not None:
+            conditions.append(AuditEvent.action == action)
+        if actions_in is not None:
+            conditions.append(AuditEvent.action.in_(list(actions_in)))
+        if resource is not None:
+            conditions.append(AuditEvent.resource == resource)
+        if outcome is not None:
+            conditions.append(AuditEvent.outcome == outcome)
+        if session_id is not None:
+            conditions.append(AuditEvent.session_id == session_id)
+        if start is not None:
+            conditions.append(AuditEvent.created_at >= start)
+        if end is not None:
+            conditions.append(AuditEvent.created_at <= end)
+
+        total_stmt = (
+            select(func.count()).select_from(AuditEvent).where(*conditions)
+        )
+        total = (await self.session.execute(total_stmt)).scalar_one()
+
+        stmt = (
+            select(AuditEvent)
+            .where(*conditions)
+            .order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        rows = (await self.session.execute(stmt)).scalars().all()
+        return rows, int(total)
+
     async def log_event(
         self,
         *,
         actor_id: str | None,
         action: AuditAction,
+        actor_kind: str | None = None,
         resource: str | None = None,
         resource_id: str | None = None,
         outcome: str = "success",
@@ -87,6 +154,7 @@ class AuditRepository(BaseRepository[AuditEvent]):
         """Create and flush a new audit event."""
         event = AuditEvent(
             actor_id=actor_id,
+            actor_kind=actor_kind,
             action=action,
             resource=resource,
             resource_id=resource_id,

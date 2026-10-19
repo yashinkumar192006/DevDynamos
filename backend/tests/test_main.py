@@ -34,3 +34,7 @@ async def test_system_status():
     assert "providers" in json_data
     assert "database" in json_data["providers"]
     assert "llm" in json_data["providers"]
+    classifier = json_data["providers"]["classifier"]
+    assert classifier["status"] in {"ready", "deterministic_only"}
+    assert classifier["unknown_field_sensitivity"] == "high"
+    assert classifier["uncertain_handling"] == "escalate"

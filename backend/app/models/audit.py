@@ -10,7 +10,6 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.orm import relationship
 
 from .base import Base, _utcnow
 import enum
@@ -34,11 +33,22 @@ class AuditEvent(Base):
 
     Audit events never store raw sensitive content. Fields that reference
     protected data do so by id / hash only.
+
+    ``actor_id`` is a *polymorphic* reference — ``users.id`` for human
+    principals and ``service_accounts.id`` for agent/service principals —
+    discriminated by ``actor_kind`` (``"user"`` | ``"service"``). There is
+    deliberately no foreign key: a single column cannot reference two
+    tables, and audit rows must survive account deletion (retention), so
+    they are never cascade-deleted.
     """
 
     __tablename__ = "audit_events"
 
-    actor_id = Column(String(32), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    #: ``"user"`` (human, ``users.id``) or ``"service"`` (agent/service
+    #: account, ``service_accounts.id``). ``None`` = legacy pre-actor-kind
+    #: rows, treated as user actors.
+    actor_kind = Column(String(20), nullable=True)
+    actor_id = Column(String(32), nullable=True, index=True)
     action = Column(
         SAEnum(AuditAction, name="audit_action"),
         nullable=False,
@@ -49,9 +59,6 @@ class AuditEvent(Base):
     detail = Column(Text, nullable=True)  # structured JSON summary (no raw PII)
     ip_address = Column(String(45), nullable=True)
     session_id = Column(String(64), nullable=True)
-
-    # Relationships
-    actor = relationship("User", back_populates="audit_events")
 
     __table_args__ = (
         Index("ix_audit_action_created", "action", "created_at"),

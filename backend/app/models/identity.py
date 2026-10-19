@@ -38,7 +38,9 @@ class User(Base):
     )
     privacy_requests = relationship("PrivacyRequest", back_populates="requester", cascade="all, delete-orphan")
     ai_interactions = relationship("AIInteraction", back_populates="user", cascade="all, delete-orphan")
-    audit_events = relationship("AuditEvent", back_populates="actor", cascade="all, delete-orphan")
+    # NOTE: no ``audit_events`` relationship. Audit rows are polymorphic
+    # (``actor_id`` references users *or* service accounts) and must survive
+    # account deletion for retention — the repository is the only access path.
 
     def __repr__(self) -> str:
         return f"<User {self.username}>"

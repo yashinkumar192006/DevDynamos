@@ -1,451 +1,428 @@
 # ContextShield — Integration Guide
 
-> **Version:** 1.0.0  
-> **Status:** Draft — Pre-implementation  
-> **Last Updated:** 2026-10-18
+> **Version:** 2.0.0
+> **Status:** Matches the implemented gateway (Prompts 1–9) — verified against
+> the API, the Python SDK (`sdk/`), and the runnable examples (`examples/`).
+> **Last Updated:** 2026-10-19
 
 ---
 
 ## 1. Overview
 
-ContextShield provides **two integration methods** for AI agents and applications:
+ContextShield sits between your AI agent and the data it uses. The agent does
+**not** read protected data or call a model on protected data directly;
+instead it asks the gateway, which verifies identity, evaluates policy, applies
+minimum-disclosure transforms, optionally runs an inspected model stage, and
+records an audit event for every decision.
 
-1. **Python SDK** — Direct import for Python-based AI agents (lowest latency, tightest integration).
-2. **HTTP REST API** — Language-agnostic integration via the FastAPI gateway (works with any language/platform).
+There are two integration methods, and they are the same contract:
 
-Both methods enforce the same privacy pipeline. The SDK is a thin wrapper around the API.
+1. **Python SDK** (`sdk/`, package `contextshield`) — a thin, typed HTTP client
+   for Python agents.
+2. **HTTP REST API** — language-agnostic JSON endpoints (works with Node.js,
+   Go, Java, .NET, curl, anything).
+
+> **The SDK is convenience, not protection.** Protection applies exactly to
+> the code paths that go through the gateway. If your agent can still query
+> the database directly, or send raw data to a model, nothing is enforced.
+> See §7 “Honest security boundary”.
+
+Everything in this guide is backed by runnable code:
+
+| Integration pattern | Example |
+|---|---|
+| A simple existing Python agent | [`examples/simple_agent.py`](../examples/simple_agent.py) |
+| An agent with a tool / data connector | [`examples/tool_connector_agent.py`](../examples/tool_connector_agent.py) |
+| Gateway pre-flight before your own LLM | [`examples/llm_precheck_agent.py`](../examples/llm_precheck_agent.py) |
+| Generic HTTP (non-Python agents) | [`examples/http/README.md`](../examples/http/README.md) |
+| End-to-end: BLOCK handling + approved result | [`examples/demo_end_to_end.py`](../examples/demo_end_to_end.py) |
 
 ---
 
-## 2. Quick Start
+## 2. Prerequisites
 
-### 2.1 Python SDK
+1. **Gateway running** against the migrated + seeded demo database:
+
+   ```powershell
+   cd backend
+   .venv\Scripts\python.exe -m alembic upgrade head
+   .venv\Scripts\python.exe -m app.seed
+   .venv\Scripts\uvicorn.exe app.main:app --port 8000
+   ```
+
+2. **A credential.** Two kinds exist:
+
+   * **Human users** — `POST /api/v1/auth/login` with username/password
+     returns a short-lived JWT. Use a seeded demo user
+     (`backend/app/seed.py`: `natalie.brooks`, `sarah.chen`, `eve.johnson`,
+     `mia.torres`, `admin`) or a real account.
+   * **Agents / services** — create a service account once; the API key is
+     printed exactly once and only its hash is stored:
+
+     ```powershell
+     cd backend
+     .venv\Scripts\python.exe -m app.create_service_account --name support-copilot `
+         --scopes privacy:request,customer_records:read
+     ```
+
+     Present it as `X-API-Key: <key>`. Scopes gate what the agent may do
+     (`privacy:request`, `resource:action`, `role:<name>`, or `*`).
+
+> **Never trust client-supplied identity or purpose.** The gateway resolves
+> identity from the credential and re-reads roles/scopes from the database on
+> every request. The `purpose` field is an *input to policy evaluation*, not
+> proof — free text can never grant access.
+
+---
+
+## 3. The HTTP contract
+
+Base URL: `http://localhost:8000` (configurable). All payloads are JSON.
+
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `POST /api/v1/auth/login` | — | Exchange username/password for a JWT |
+| `POST /api/v1/privacy/secure-request` | Bearer **or** `X-API-Key` | The governed pipeline (the core call) |
+| `GET /api/v1/audit/events` | Bearer **or** `X-API-Key` | Query the audit trail (visibility-scoped) |
+| `GET /api/v1/audit/events/{id}` | Bearer **or** `X-API-Key` | Full explainability for one event |
+| `GET /api/v1/health`, `/health` | — | Liveness |
+
+### 3.1 Secure request
+
+```http
+POST /api/v1/privacy/secure-request
+Authorization: Bearer <token>          # or: X-API-Key: <agent key>
+Content-Type: application/json
+
+{
+  "resource": "order_records",
+  "data_fields": ["order_id", "status"],
+  "purpose": "order_status",
+  "operation": "read",
+  "target_entity": "ORD0001",
+  "purpose_detail": null,
+  "include_llm_response": false,
+  "context": {"session_id": "run-42", "agent_name": "my-agent"}
+}
+```
+
+* `resource` — catalog resource (`employee_salary`, `order_records`,
+  `customer_records`, …); never a SQL table or free-form query.
+* `data_fields` — requested fields; at least one.
+* `purpose` — required policy input (`hr_review`, `order_status`,
+  `customer_service`, `self_service`, …).
+* `operation` — `read` or `aggregate`.
+* `target_entity` — the record/scope being addressed (e.g. `EMP001`,
+  `CUS003`, `department-Engineering`); omit only for un-scoped requests.
+* `context` — correlation metadata only (session/conversation/task ids, agent
+  name). Treated as untrusted labels; never identity or authorization.
+* `include_llm_response` — request a governed model stage (the default
+  provider is a deterministic **mock**, so nothing leaves the deployment).
+
+Response:
+
+```jsonc
+{
+  "request_id": "8f1e…",                 // correlation id (also on every audit event)
+  "overall_decision": "ALLOW",           // ALLOW | PARTIAL_ALLOW | BLOCK | ESCALATION_NEEDED
+  "reason_code": "NORM_MATCHED",
+  "reason": "Access authorised by policy: …",
+  "fields": {
+    "order_id":  {"action": "ALLOW", "value": "ORD0001", "reason_code": "NORM_MATCHED",
+                  "policy_id": "…", "policy_version": 3},
+    "status":    {"action": "ALLOW", "value": "delivered", "reason_code": "NORM_MATCHED"}
+  },
+  "records": [ {"order_id": "ORD0001", "status": "delivered"} ],  // approved rows only; null when blocked
+  "retrieved": true,
+  "llm_response": null,                  // present only when permitted + requested
+  "llm": null,                           // model-stage metadata (provider/model/guard)
+  "guard_triggered": false,              // output privacy guard outcome
+  "mosaic_warning": false,               // cumulative-disclosure risk flag
+  "audit_id": "9a0d…",                   // the recorded audit event for this decision
+  "timestamp": "2026-10-19T11:30:00.123456+00:00"
+}
+```
+
+Field actions: `ALLOW`, `MASK`, `TOKENIZE`, `GENERALIZE`, `AGGREGATE`, `BLOCK`,
+`ESCALATE`. Values are **already transformed** when released — a `MASK` field
+carries the masked value, an `AGGREGATE` field carries statistics only.
+
+### 3.2 Decision semantics
+
+| `overall_decision` | Meaning | What the caller must do |
+|---|---|---|
+| `ALLOW` | Everything requested was granted | Use `fields` / `records` as-is |
+| `PARTIAL_ALLOW` | Some fields were denied or transformed | Use per-field values; never backfill from the source |
+| `BLOCK` | Nothing was disclosed; no model ran | Surface the refusal; do not retry with tweaked fields |
+| `ESCALATION_NEEDED` | A review is required before any disclosure | Hand off to a human process; disclose nothing |
+
+`BLOCK` and `ESCALATION_NEEDED` are **HTTP 200 responses** — normal outcomes,
+not transport errors. Only malformed requests (`400`/`422`), bad credentials
+(`401`), insufficiently privileged identities (`403`), and server failures
+(`5xx`) are HTTP errors. On `5xx`, **fail closed**: never fall back to direct
+data access.
+
+### 3.3 Errors
+
+| Status | Meaning |
+|---|---|
+| 400 / 422 | Request shape rejected (unknown resource, empty fields, bad purpose shape) |
+| 401 | Missing/invalid credential |
+| 403 | Verified identity not permitted (incl. out-of-scope audit filters) |
+| 404 | Missing or out-of-scope resource (existence is not disclosed) |
+| 5xx | Gateway/backend failure — fail closed |
+
+### 3.4 Audit & explainability
+
+`GET /api/v1/audit/events` returns a paginated, filtered view
+(`action`, `requester_id`, `resource`, `outcome`, `session_id`,
+`start_date`, `end_date`, `limit` 1–100, `offset`) of the recorded trail.
+`GET /api/v1/audit/events/{id}` returns full detail: per-field decisions with
+reason codes and policy versions, transformation types, purpose/operation,
+correlation ids, verified requester + agent snapshots, and model-stage
+metadata (`model_invoked`, guard action).
+
+Visibility is enforced server-side from the verified principal:
+
+* `admin` (or a service account with `*` / `role:admin`) → full trail;
+* `hr_manager` / `executive` → privacy-pipeline events, all actors;
+* everyone else (including agents) → **own events only**.
+
+Events are safe by construction: no passwords, API keys, JWTs, raw protected
+values, purpose free text, prompts, or model outputs are ever stored.
+Full contract: [`docs/api-design.md`](api-design.md) §4.8–4.9.
+
+---
+
+## 4. Python SDK
+
+### 4.1 Install
+
+```powershell
+pip install -e sdk        # from the repository root (editable, development)
+```
+
+The package is typed (`py.typed`), depends only on `httpx`, requires
+Python ≥ 3.10, and ships no credentials.
+
+### 4.2 Configure
+
+Credentials come from the environment — never hardcode them:
+
+| Variable | Purpose |
+|---|---|
+| `CONTEXTSHIELD_BASE_URL` | Gateway URL (default `http://localhost:8000`) |
+| `CONTEXTSHIELD_API_KEY` | Agent/service key (`X-API-Key`) |
+| `CONTEXTSHIELD_TOKEN` | Pre-issued JWT |
+| `CONTEXTSHIELD_USERNAME` + `CONTEXTSHIELD_PASSWORD` | Human login flow |
 
 ```python
 from contextshield import ContextShieldClient
 
-# Initialize with API URL and credentials
-client = ContextShieldClient(
-    base_url="http://localhost:8000",
-    email="alice.chen@contextshield.demo",
-    password="Demo-Pass-123!"
-)
+client = ContextShieldClient.from_env()
 
-# Make a privacy-enforced data request
+# Or configure explicitly (e.g. from a secret manager):
+client = ContextShieldClient(
+    base_url="https://shield.internal",
+    api_key_provider=lambda: read_secret("contextshield/agent-key"),
+    timeout=5.0,
+    max_retries=1,
+)
+```
+
+Exactly one credential form may be set; ambiguous configuration raises
+`ConfigurationError`. An anonymous client can call `health()` only —
+authenticated calls fail closed.
+
+### 4.3 Submit a governed request
+
+```python
 result = client.secure_request(
-    data_fields=["employee_name", "salary", "department"],
-    purpose="performance_review",
-    target_entity="employee-456"
-)
-
-# Access the per-field decisions
-for field_name, decision in result.fields.items():
-    print(f"{field_name}: {decision.action} → {decision.value}")
-
-# Output for HR manager:
-# employee_name: ALLOW → Jane Smith
-# salary: ALLOW → 95000
-# department: ALLOW → Engineering
-```
-
-### 2.2 HTTP REST API
-
-```bash
-# 1. Authenticate
-TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"alice.chen@contextshield.demo","password":"Demo-Pass-123!"}' \
-  | jq -r '.access_token')
-
-# 2. Make a privacy-enforced request
-curl -s -X POST http://localhost:8000/api/v1/privacy/secure-request \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "data_fields": ["employee_name", "salary", "department"],
-    "purpose": "performance_review",
-    "target_entity": "employee-456"
-  }'
-```
-
----
-
-## 3. Python SDK Reference
-
-### 3.1 Installation
-
-```bash
-# From the project root (development mode)
-pip install -e ./sdk
-
-# Or from PyPI (future)
-# pip install contextshield
-```
-
-### 3.2 Client Initialization
-
-```python
-from contextshield import ContextShieldClient
-
-# Option A: Email/password authentication
-client = ContextShieldClient(
-    base_url="http://localhost:8000",
-    email="alice.chen@contextshield.demo",
-    password="Demo-Pass-123!"
-)
-
-# Option B: Pre-existing JWT token
-client = ContextShieldClient(
-    base_url="http://localhost:8000",
-    token="eyJhbGciOiJIUzI1NiIs..."
+    resource="customer_records",
+    data_fields=["contact_email", "contact_phone"],
+    purpose="customer_service",
+    target_entity="CUS003",
+    context={"session_id": "ticket-4521"},   # correlation only
+    include_llm_response=False,
 )
 ```
 
-### 3.3 SDK Methods
-
-#### `secure_request()`
-
-Submit a data request through the full privacy pipeline.
+### 4.4 Handle the decision
 
 ```python
-result = client.secure_request(
-    data_fields=["employee_name", "salary"],
-    purpose="performance_review",
-    target_entity="employee-456",
-    session_id="sess-abc123",           # Optional: mosaic tracking
-    include_llm_response=False          # Optional: generate NL response
-)
-
-# result.overall_decision     → "PARTIAL_ALLOW"
-# result.fields               → dict of field decisions
-# result.audit_id             → UUID of the audit record
-# result.guard_triggered      → bool
-# result.mosaic_warning       → bool
-```
-
-#### `get_policies()`
-
-List active privacy policies.
-
-```python
-policies = client.get_policies(limit=20, offset=0, role="hr_manager")
-
-for policy in policies.items:
-    print(f"{policy.name}: {policy.action} for {policy.allowed_roles}")
-```
-
-#### `get_audit_events()`
-
-Query the audit trail (requires appropriate role).
-
-```python
-events = client.get_audit_events(
-    limit=10,
-    decision="BLOCK",
-    start_date="2026-10-01"
-)
-
-for event in events.items:
-    print(f"{event.timestamp}: {event.overall_decision}")
-```
-
-#### `get_audit_event()`
-
-Get details of a specific audit event.
-
-```python
-event = client.get_audit_event("aud-789e8400-...")
-print(event.decisions)
-```
-
-#### `get_system_status()`
-
-Check system health and service status.
-
-```python
-status = client.get_system_status()
-print(f"DB: {status.services.database.status}")
-print(f"Active policies: {status.services.policy_engine.active_policies}")
-```
-
-### 3.4 Error Handling
-
-```python
-from contextshield.exceptions import (
-    ContextShieldError,
-    AuthenticationError,
-    AuthorizationError,
-    ValidationError,
-    ServerError
-)
-
-try:
-    result = client.secure_request(
-        data_fields=["salary"],
-        purpose="performance_review",
-        target_entity="employee-456"
-    )
-except AuthenticationError:
-    print("Token expired, re-authenticating...")
-    client.authenticate()
-    result = client.secure_request(...)
-except AuthorizationError as e:
-    print(f"Access denied: {e.message}")
-except ValidationError as e:
-    print(f"Invalid request: {e.details}")
-except ServerError as e:
-    print(f"Server error: {e.request_id}")
-```
-
-### 3.5 SDK Data Models
-
-```python
-from contextshield.models import (
-    SecureRequestResult,
-    FieldDecision,
-    PolicyInfo,
-    AuditEvent
-)
-
-# SecureRequestResult
-result.overall_decision: str          # "ALLOW" | "PARTIAL_ALLOW" | "BLOCK"
-result.fields: dict[str, FieldDecision]
-result.audit_id: str
-result.guard_triggered: bool
-result.mosaic_warning: bool
-result.timestamp: datetime
-
-# FieldDecision
-decision.action: str     # "ALLOW" | "MASK" | "BLOCK" | ...
-decision.value: Any      # The (possibly transformed) value, or None
-decision.reason_code: str
-decision.policy_id: str | None
-decision.policy_version: int | None
-```
-
----
-
-## 4. Integration Patterns
-
-### 4.1 AI Agent Middleware Pattern
-
-The most common integration: ContextShield acts as middleware between your AI agent and its data sources.
-
-```python
-from contextshield import ContextShieldClient
-
-class PrivacyAwareAgent:
-    def __init__(self, llm, privacy_client: ContextShieldClient):
-        self.llm = llm
-        self.privacy = privacy_client
-
-    def handle_query(self, user_query: str, user_token: str):
-        # 1. Parse the query to identify data needs (your agent logic)
-        parsed = self.parse_query(user_query)
-
-        # 2. Run through ContextShield privacy pipeline
-        result = self.privacy.secure_request(
-            data_fields=parsed.fields,
-            purpose=parsed.purpose,
-            target_entity=parsed.target,
-            include_llm_response=True  # Let ContextShield handle LLM call
-        )
-
-        # 3. Return the privacy-enforced response
-        if result.overall_decision == "BLOCK":
-            return "I'm sorry, I don't have permission to access that data."
-
-        return result.llm_response  # Already privacy-safe
-```
-
-### 4.2 Pre-Query Guard Pattern
-
-Use ContextShield to check permissions before making your own data queries.
-
-```python
-# 1. Check what the user can access
-result = privacy_client.secure_request(
-    data_fields=["salary", "department", "ssn"],
-    purpose="performance_review",
-    target_entity="employee-456",
-    include_llm_response=False  # We'll handle the data ourselves
-)
-
-# 2. Build our own query using only allowed fields
-allowed_fields = [
-    field for field, decision in result.fields.items()
-    if decision.action == "ALLOW"
-]
-
-# 3. Query our own database with scoped SELECT
-data = db.query(Employee).with_only_columns(allowed_fields).filter_by(...)
-```
-
-### 4.3 Output Validation Pattern
-
-Use ContextShield to validate LLM responses before returning them to users.
-
-```python
-# 1. Your agent generates a response with its own LLM
-raw_response = your_llm.generate(prompt)
-
-# 2. Send the response through ContextShield for PII scanning
-result = privacy_client.secure_request(
-    data_fields=["llm_output"],
-    purpose="output_validation",
-    target_entity="response-validation",
-    context={"raw_text": raw_response}
-)
-
-# 3. Use the sanitized response
-if result.guard_triggered:
-    return result.fields["llm_output"].value  # Sanitized
+if result.blocked:          # .allowed / .blocked / .escalated
+    reasons = sorted({d.reason_code for d in result.fields.values() if d.reason_code})
+    reply = f"Not disclosed ({', '.join(reasons)})"
+elif result.escalated:
+    reply = "A review is required before this can be answered."
 else:
-    return raw_response  # No PII detected
+    approved = result.granted_values()      # only granted, already-transformed values
+    reply = f"Contact: {approved.get('contact_email')}"
+
+    # Optionally, exception-style handling:
+    # result.raise_if_blocked()  → RequestBlockedError / RequestEscalatedError
 ```
+
+* `result.fields` — `dict[str, FieldDecision]` (`action`, `value`,
+  `reason_code`, `policy_id`, `policy_version`).
+* `result.records` — approved rows or `None`; `result.audit_id` — the trail
+  reference; `result.llm` / `result.llm_response` — governed model stage when
+  requested and permitted.
+* `FieldDecision.granted` mirrors the backend semantics; `value` is the
+  transformed value.
+
+### 4.5 Errors
+
+All SDK errors derive from `ContextShieldError`:
+
+| Exception | Meaning |
+|---|---|
+| `ConfigurationError` | Missing/ambiguous client configuration |
+| `AuthenticationError` | 401 |
+| `PermissionDeniedError` | 403 |
+| `ValidationError` | 400/422 (structured `.details`) |
+| `NotFoundError` | 404 (missing **or** out of scope) |
+| `GatewayError` | 5xx / unexpected status |
+| `GatewayUnavailableError` | Connection/DNS/TLS failure |
+| `RequestTimeoutError` | Timeout exceeded |
+| `InvalidResponseError` | Off-contract or non-JSON response |
+
+Treat every transport-level failure as **fail closed**: surface an error, do
+not silently serve raw data instead.
+
+### 4.6 Audit queries
+
+```python
+page = client.audit_events(action="data_denied", limit=20)
+for event in page.items:
+    print(event.actor.kind, event.action, event.overall_decision, event.reason_codes)
+
+detail = client.audit_event(page.items[0].id)
+print(detail.decisions, detail.llm)
+```
+
+### 4.7 Timeouts, retries, logging
+
+* `timeout` — seconds or `httpx.Timeout` (default 10s).
+* `max_retries` — transport errors only, default `0`. Retried requests can
+  appear as duplicate attempts in the audit trail.
+* Logging uses the `contextshield` logger: method, path, status, duration,
+  `request_id` — **never** credentials, headers, or bodies.
 
 ---
 
-## 5. Integration with Existing Frameworks
+## 5. Integration patterns
 
-### 5.1 LangChain Integration
+### 5.1 A simple existing Python agent
 
-```python
-from langchain.tools import BaseTool
-from contextshield import ContextShieldClient
+Keep the agent's structure; replace its one protected lookup method with a
+secure request. The agent's only path to protected data becomes the gateway.
 
-class PrivacyGuardedTool(BaseTool):
-    name = "employee_lookup"
-    description = "Look up employee information with privacy controls"
+→ Full code: [`examples/simple_agent.py`](../examples/simple_agent.py)
 
-    def __init__(self, privacy_client: ContextShieldClient):
-        super().__init__()
-        self.privacy = privacy_client
+### 5.2 An agent with a tool / data connector
 
-    def _run(self, employee_id: str, fields: list[str], purpose: str):
-        result = self.privacy.secure_request(
-            data_fields=fields,
-            purpose=purpose,
-            target_entity=employee_id
-        )
-        return {
-            f: d.value for f, d in result.fields.items()
-            if d.action in ("ALLOW", "MASK", "GENERALIZE")
-        }
+Wrap the tool. Every tool call carries an explicit purpose and goes through
+`secure_request`; the tool hands the host agent only the transformed values
+released by the gateway (masking, generalization, aggregation apply
+server-side). A tool call without a purpose is rejected locally, fail-closed.
+
+→ Full code: [`examples/tool_connector_agent.py`](../examples/tool_connector_agent.py)
+
+### 5.3 Gateway pre-flight before your own LLM
+
+Run the secure request **first**, then build the model prompt **only** from
+the approved values. If the decision is `BLOCK` — including prompt-injection
+attempts smuggled through free-text fields — the model is never called. (If
+you prefer the gateway to run the model stage itself, set
+`include_llm_response=True`; the model sees only authorized,
+post-transformation context, and its output is inspected before release.)
+
+→ Full code: [`examples/llm_precheck_agent.py`](../examples/llm_precheck_agent.py)
+
+### 5.4 Non-Python agents (generic HTTP)
+
+Call the API directly with your platform's HTTP client — the contract in §3 is
+everything you need. A minimal Node.js variant:
+
+```javascript
+const response = await fetch(`${BASE}/api/v1/privacy/secure-request`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json", "X-API-Key": process.env.CONTEXTSHIELD_API_KEY },
+  body: JSON.stringify({
+    resource: "order_records",
+    data_fields: ["order_id", "status"],
+    purpose: "order_status",
+    target_entity: "ORD0001",
+  }),
+});
+const result = await response.json();
+if (result.overall_decision === "ALLOW") { /* use result.fields */ }
+else { /* surface result.overall_decision — do not retry around it */ }
 ```
 
-### 5.2 FastAPI Sub-Application
+→ curl / JavaScript / PowerShell walkthroughs:
+[`examples/http/README.md`](../examples/http/README.md)
 
-```python
-from fastapi import FastAPI, Depends
-from contextshield import ContextShieldClient
+### 5.5 End-to-end demo
 
-app = FastAPI()
-privacy = ContextShieldClient(base_url="http://localhost:8000")
-
-@app.get("/my-agent/employee/{employee_id}")
-async def get_employee(employee_id: str, current_user = Depends(get_user)):
-    result = privacy.secure_request(
-        data_fields=["full_name", "department", "salary"],
-        purpose="employee_lookup",
-        target_entity=employee_id
-    )
-    return result.fields
-```
+[`examples/demo_end_to_end.py`](../examples/demo_end_to_end.py) runs the full
+story on the seeded synthetic data: a customer's request for **another**
+customer's data returns `BLOCK` (no data, no model call), the same customer's
+request for their **own** order returns `ALLOW` (with a mock-LLM summary),
+and the audit trail for the session is printed at the end.
 
 ---
 
-## 6. Configuration
+## 6. Verification
 
-### 6.1 Environment Variables
+| Check | Command |
+|---|---|
+| Backend suite (incl. audit API, pipeline, auth) | `cd backend && pytest tests/ -q` |
+| SDK suite (self-contained; simulated gateway) | `cd sdk && pytest tests -q` |
+| SDK install from a clean environment | `pip install -e sdk` in a fresh venv |
+| Live gateway check (opt-in) | set `CONTEXTSHIELD_LIVE_GATEWAY_URL` (+ credentials) and run `pytest sdk/tests/test_live_gateway.py -v` |
+| Runnable examples | `python examples/demo_end_to_end.py` etc. (gateway + seeded DB) |
 
-| Variable                        | Default                          | Description                       |
-|---------------------------------|----------------------------------|-----------------------------------|
-| `CONTEXTSHIELD_BASE_URL`        | `http://localhost:8000`          | Backend API URL                   |
-| `CONTEXTSHIELD_TIMEOUT`         | `30`                             | Request timeout (seconds)         |
-| `CONTEXTSHIELD_RETRY_COUNT`     | `3`                              | Max retries on transient errors   |
-| `CONTEXTSHIELD_VERIFY_SSL`      | `true`                           | Verify SSL certificates           |
-
-### 6.2 SDK Configuration Object
-
-```python
-from contextshield import ContextShieldClient, ClientConfig
-
-config = ClientConfig(
-    base_url="http://localhost:8000",
-    timeout=30,
-    retry_count=3,
-    verify_ssl=True
-)
-
-client = ContextShieldClient(config=config, email="...", password="...")
-```
+CI runs the backend and SDK suites on every push
+(`.github/workflows/ci.yml`: `backend-tests`, `sdk-tests`, `frontend-lint`).
 
 ---
 
-## 7. Testing Your Integration
+## 7. Honest security boundary
 
-### 7.1 Test Against Mock LLM
-
-The backend ships with a MockLLMProvider that produces deterministic responses:
-
-```python
-# Set in .env
-LLM_PROVIDER=mock
-
-# Mock responses are deterministic, making integration tests reproducible
-result = client.secure_request(
-    data_fields=["salary"],
-    purpose="performance_review",
-    target_entity="employee-456",
-    include_llm_response=True
-)
-assert result.llm_response is not None
-assert "salary" not in result.llm_response.lower()  # Guard strips PII
-```
-
-### 7.2 Test with Demo Users
-
-Each demo user has a specific role. Test your integration against each role to verify privacy enforcement:
-
-```python
-import pytest
-from contextshield import ContextShieldClient
-
-@pytest.fixture(params=[
-    ("alice.chen@contextshield.demo", "hr_manager", True),    # Should see salary
-    ("dave.kumar@contextshield.demo", "employee", False),     # Should NOT see salary
-])
-def user_and_expected(request):
-    return request.param
-
-def test_salary_access(user_and_expected):
-    email, role, should_see = user_and_expected
-    client = ContextShieldClient(
-        base_url="http://localhost:8000",
-        email=email,
-        password="Demo-Pass-123!"
-    )
-    result = client.secure_request(
-        data_fields=["salary"],
-        purpose="performance_review",
-        target_entity="employee-456"
-    )
-    if should_see:
-        assert result.fields["salary"].action == "ALLOW"
-    else:
-        assert result.fields["salary"].action == "BLOCK"
-```
+* **Installing the SDK protects nothing by itself.** The gateway enforces
+  policy *for requests it receives*. Your agent must be changed so its
+  protected retrieval and model-invocation paths actually call the gateway.
+* **Remove or restrict the direct paths.** If the agent keeps a database
+  credential or an unfiltered provider client, that path bypasses
+  ContextShield entirely. In production, scope the agent's data credentials
+  to the gateway (or remove them), and front the model provider with the
+  gateway's adapter where possible.
+* **Fail closed.** On gateway errors/timeouts/5xx, surface an error or a safe
+  refusal. Never "fall back" to querying the source database or calling the
+  model with raw data.
+* **`BLOCK` is not an obstacle to engineer around.** It is the enforced
+  decision; retrying with rephrased fields or different purposes to fish for
+  data defeats the system (and is itself visible in the audit trail).
+* **Purpose is context, not permission.** The gateway never accepts identity
+  or purpose claims from the client as proof; it re-derives both
+  server-side.
+* **Audit is record, not surveillance.** Events store identifiers, reason
+  codes, transformation *types*, and model metadata — never raw values,
+  credentials, or complete prompts/outputs, and reads are visibility-scoped.
 
 ---
 
-## 8. Security Checklist for Integrators
+## 8. Troubleshooting
 
-- [ ] Store your ContextShield credentials in environment variables or a secrets manager, never in code.
-- [ ] Always pass the authenticated user's real identity; never impersonate users.
-- [ ] Handle `BLOCK` and `ESCALATION_NEEDED` decisions gracefully in your UI/agent.
-- [ ] Do not cache privacy decisions — they may change as policies are updated.
-- [ ] Use `session_id` for mosaic tracking if your agent makes multiple queries per user session.
-- [ ] Log the `audit_id` from each response for troubleshooting and compliance.
-- [ ] Test your integration against all demo user roles before deployment.
-- [ ] Never bypass ContextShield by querying the database directly.
+| Symptom | Likely cause / fix |
+|---|---|
+| `ConfigurationError: No credentials configured` | Set one of the `CONTEXTSHIELD_*` credential forms (§4.2) |
+| `GatewayUnavailableError` | Gateway not running, or wrong `CONTEXTSHIELD_BASE_URL` |
+| `401` on every call | Wrong password / expired token / disabled or expired API key |
+| `403` from audit endpoints | Your identity is not scoped for that query (§3.4) |
+| `INVALID_PURPOSE` reason code | The `purpose` value is not a recognized policy input — check spelled purposes in `docs/policy-engine.md` |
+| `NO_MATCHING_NORM` / `INSUFFICIENT_ROLE` | Correct, enforced denial — adjust who asks, for what, not the request string |
+| Empty `records` with `PARTIAL_ALLOW` | All requested fields were transformed into `fields`; use per-field values |
+| Audit list is empty for an agent | Agents see only their own events — expected (§3.4) |
