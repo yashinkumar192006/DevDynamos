@@ -2,7 +2,7 @@
 
 > **Prompt:** 12 of 12 — repository integrity, SDK, integration example, API/frontend completion, database/config/deployment readiness, DEVHOST demonstration, documentation, verification, release.
 > **Date:** 2026-10-20
-> **Revision:** `bf3723e` plus the uncommitted Prompt 10–12 working-tree changes.
+> **Revision:** `09e479d` (release commit pushed to `origin/main`; GitHub Actions run `39384448875` passed). This document was corrected in a docs-only follow-up to record the hosted CI result.
 > **Release position:** **Release-ready for a local/DEVHOST demonstration. Not deployed. Not production-certified.**
 > Verification proves the properties below on the tested revision and environment; it does not prove the absence of vulnerabilities.
 
@@ -19,11 +19,11 @@
 | Does the frontend show the real decisions? | **Yes** — 12 Playwright journeys against the real backend; blocked values never rendered. See §5. |
 | Is the database initialization/recovery documented? | **Yes** — bootstrap, migrations, idempotent seed, backup, safe migration, and explicit destructive-reset warnings. See §6. |
 | Are configuration and LLM providers handled safely? | **Yes** — mock default, server-side Gemini only, output guard, fail-closed. See §7. |
-| Are Docker/CI/deployment paths present? | **Yes** — images and compose stack verified; Render/Vercel runbook written. Hosted deployment and hosted CI did **not** run. See §8. |
+| Are Docker/CI/deployment paths present? | **Yes** — images and compose stack verified; GitHub Actions CI passed all four jobs; Render/Vercel runbook written. Hosted deployment did **not** run. See §8. |
 | Is the ten-scenario DEVHOST demo demonstrated? | **Yes** — 9 automated scenarios PASS, browser step covered manually + by Playwright. See §9. |
 | Is the documentation complete? | **Yes** — 23 Markdown files, all relative links resolve. See §10. |
 | Were tests weakened or results invented? | **No.** No test was deleted or relaxed; all failures found were fixed and re-run. See §1.3 and §11. |
-| Was anything committed, pushed, or deployed? | **No.** Prompt 10–12 changes remain uncommitted; no remote resources were created or modified. |
+| Was anything committed, pushed, or deployed? | **Yes for commit/push, no for deployment.** Release commit `09e479d` was pushed to `origin/main`; GitHub Actions passed. No remote application, database, or paid resource was created. |
 
 ---
 
@@ -66,7 +66,8 @@ the Prompt 10 console redesign are unrelated to tests or security controls.
 
 The repository working tree contains the Prompt 10–12 additions (frontend
 console, audit/policy/dashboard APIs, verification suites, Docker/CI hardening,
-SDK page, examples, docs). **Nothing was committed or pushed in this phase.**
+SDK page, examples, docs). **They were committed as `09e479d` and pushed to
+`origin/main`; nothing was deployed.**
 
 ### 1.3 Document ↔ implementation reconciliation
 
@@ -326,7 +327,7 @@ Documents: [`llm-integration.md`](llm-integration.md),
   migrations, seeded idempotently, and served `/health`; frontend returned
   HTTP 200; containers run as uid 1000; no `.env` copied.
 
-### CI (present; hosted run not executed for this revision)
+### CI (hosted run PASS)
 
 `.github/workflows/ci.yml` defines:
 
@@ -336,8 +337,11 @@ Documents: [`llm-integration.md`](llm-integration.md),
 4. `frontend-e2e` — PostgreSQL + seeded backend + Playwright Chromium, with
    report upload on failure.
 
-The same jobs were run locally. **GitHub-hosted CI did not run for the
-uncommitted Prompt 10–12 revision**, so no hosted badge result is claimed.
+The same jobs were run locally. Release commit `09e479d` was pushed to
+`origin/main`, and **GitHub Actions run
+[`39384448875`](https://github.com/yashinkumar192006/DevDynamos/actions/runs/39384448875)
+completed successfully**: `backend-tests`, `sdk-tests`, `frontend-lint`, and
+`frontend-e2e` all passed.
 
 ### Deployment
 
@@ -429,7 +433,7 @@ design” is noted separately, not counted as a failure.
 | Documentation links | 64 relative links across 23 files | **PASS** |
 | Hosted deployment (Render/Vercel/DB) | — | **NOT RUN** (not authorized; no resources created) |
 | Live Gemini provider | — | **NOT RUN** (no key; no external call) |
-| GitHub-hosted CI for this revision | — | **NOT RUN** (changes uncommitted/unpushed) |
+| GitHub-hosted CI (commit `09e479d`) | [run `39384448875`](https://github.com/yashinkumar192006/DevDynamos/actions/runs/39384448875) | **PASS** — backend-tests, sdk-tests, frontend-lint, frontend-e2e |
 | Docker on non-Windows runtimes | — | **NOT RUN** |
 | Load/performance testing | — | **NOT RUN** |
 | Coverage percentage (`--cov`) | — | **NOT RUN** |
@@ -465,8 +469,7 @@ passed. No other skips.
 * That it has been deployed, or that Render/Vercel/managed PostgreSQL behavior,
   TLS, or production load has been verified.
 * That a live external LLM (Gemini) was exercised.
-* That hosted CI passed for this revision, or that coverage targets were
-  measured.
+* That coverage targets were measured.
 * That the SDK is published to a package registry.
 * That root `tests/`, `policies/`, or `database/seed/` contain working code;
   they are placeholders.
@@ -485,9 +488,9 @@ passed. No other skips.
 
 ### Working tree / release mechanics
 
-Prompt 10–12 changes are **uncommitted**. No commit, push, tag, release, or
-deployment was performed. When the owner authorizes a commit, the CI workflow
-will exercise the same jobs that passed locally.
+Release commit `09e479d` is pushed to `origin/main`; GitHub Actions run
+`39384448875` passed. A docs-only follow-up records that hosted result. No tag,
+release, or deployment was performed.
 
 ---
 

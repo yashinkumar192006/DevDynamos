@@ -34,7 +34,8 @@
 > 0 skipped · SDK 32 passed + 2 opt-in skips (clean-environment install
 > verified) · frontend lint, type-check, and production build pass ·
 > Playwright 12/12 against the real backend · Docker images build and a fresh
-> compose stack applied migrations, seeded idempotently, and served both apps.
+> compose stack applied migrations, seeded idempotently, and served both apps ·
+> GitHub Actions CI passed all four jobs ([run `39384448875`](https://github.com/yashinkumar192006/DevDynamos/actions/runs/39384448875)).
 > **Not deployed**: no remote application, database, or paid resource was
 > created. Exact commands, evidence, and limitations:
 > [`docs/release-report.md`](docs/release-report.md).
@@ -626,6 +627,7 @@ equivalent is `npm run e2e` in `frontend/`.
 | Frontend lint / type-check / production build | PASS |
 | Playwright E2E (real backend) | 12 passed |
 | Docker images | PASS (non-root, migrations + idempotent seed verified) |
+| GitHub Actions CI | PASS — all four jobs (backend, SDK, frontend lint, Playwright E2E) |
 | Deployment | **NOT DEPLOYED** — manual steps in `docs/deployment.md` |
 
 Full evidence, PASS/FAIL/BLOCKED items, and known limitations:

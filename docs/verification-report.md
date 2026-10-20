@@ -29,7 +29,7 @@ commands in Section 3 — none are estimates.
 | Item | Value |
 |---|---|
 | OS | Windows (win32) |
-| Revision | HEAD `bf3723e` + pending working-tree changes (Prompts 10–12); nothing was committed for this phase |
+| Revision | Code revision `09e479d` pushed to `origin/main`; GitHub Actions run `39384448875` passed (4/4 jobs). This docs-only correction records the hosted result. |
 | Python (backend venv) | 3.14.6 — CI targets 3.12 |
 | Node / npm | v26.4.0 / 11.17.0 |
 | PostgreSQL | Local dev instance; database `contextshield`, app role `contextshield_app` (non-superuser) |
@@ -98,6 +98,7 @@ npm audit
 | Docker | `docker compose build` + fresh-volume `up` | images PASS; migrations + idempotent seed (11 users before/after two reruns); health/frontend HTTP 200; non-root |
 | Swagger / OpenAPI | `GET /docs`, `GET /openapi.json` | HTTP 200; real route list confirmed |
 | DEVHOST demo | `python examples/devhost_demo.py` | 9 automated scenarios PASS; step 10 manual (UI served) |
+| GitHub Actions CI (hosted) | push `09e479d` → [run `39384448875`](https://github.com/yashinkumar192006/DevDynamos/actions/runs/39384448875) | **PASS** — backend-tests, sdk-tests, frontend-lint, frontend-e2e |
 | Dependencies | `pip check` / `npm audit` | `No broken requirements found` / **0 vulnerabilities** (prod + full) |
 
 ¹ `pythonjsonlogger` deprecation warning (library-level, no test impact).  
@@ -283,10 +284,9 @@ correction the same suite passed 11/11.
 12. **Docker verification ran on Windows Docker Desktop only.** The
     images build and the compose stack starts correctly there; other
     container runtimes/orchestrators were not tested.
-13. **GitHub Actions did not run this revision.** Prompts 10–12 changes
-    are uncommitted/unpushed, so CI evidence is local (backend, SDK,
-    frontend, E2E, Docker). The workflow file includes these jobs, but
-    the hosted run is not claimed.
+13. **Hosted/local environment parity differs.** Hosted CI ran on Ubuntu with
+    Python 3.12; the detailed local runs used Windows with Python 3.14. Both
+    passed, but platform-specific behavior is only covered to that extent.
 
 **Unresolved failures:** none. Every failure encountered during this
 phase was either fixed in the implementation (Section 8.1–8.3), a
