@@ -290,6 +290,25 @@ class AuditService:
             return None
         return event
 
+    async def summaries(
+        self, events: Sequence[AuditEvent]
+    ) -> list[AuditEventSummary]:
+        """Project events to the list-item shape used by the audit API.
+
+        Used by aggregation endpoints (e.g. the dashboard) that embed the
+        audit projection; actor identities are resolved from trusted
+        database state exactly as in :meth:`list_events`.
+        """
+        if not events:
+            return []
+        actors = await self._resolve_actors(events)
+        return [
+            self._summary(
+                event, actors.get(event.actor_id or "", _unknown_actor(event))
+            )
+            for event in events
+        ]
+
     async def describe(self, event: AuditEvent) -> AuditEventDetail:
         """Build the full detail projection for an in-scope event."""
         actors = await self._resolve_actors([event])

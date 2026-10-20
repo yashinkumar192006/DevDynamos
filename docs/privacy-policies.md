@@ -1,8 +1,8 @@
 # ContextShield — Privacy Policies & Decision Framework
 
-> **Version:** 1.0.0  
-> **Status:** Draft — Pre-implementation  
-> **Last Updated:** 2026-10-18
+> **Version:** 1.1.0  
+> **Status:** Implemented — seeded policy catalogue evaluated by the policy engine  
+> **Last Updated:** 2026-10-20
 
 ---
 

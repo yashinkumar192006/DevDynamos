@@ -14,8 +14,10 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_principal, get_current_user
+from app.core.config import settings
 from app.core.database import get_db
-from app.core.exceptions import AuthenticationError
+from app.core.exceptions import AuthenticationError, RateLimitError
+from app.core.rate_limit import login_ip_rate_limiter, login_rate_limiter
 from app.models import AuditAction, User
 from app.repositories import AuditRepository, UserRepository
 from app.schemas.auth import (
@@ -76,13 +78,30 @@ async def login(
     """Verify username/password and issue a JWT access token.
 
     All credential failures (unknown user, wrong password, inactive
-    account) return the same generic 401 response.
+    account) return the same generic 401 response. Repeated failures for
+    the same username+address are throttled with ``429`` (failure-only
+    sliding window — see ``app/core/rate_limit.py``).
     """
+    client_ip = _client_ip(request) or "unknown"
+    user_key = f"{payload.username.strip().lower()}|{client_ip}"
+    ip_key = f"ip:{client_ip}"
+    if settings.AUTH_RATE_LIMIT_ENABLED:
+        for limiter, key in (
+            (login_rate_limiter, user_key),
+            (login_ip_rate_limiter, ip_key),
+        ):
+            retry_after = limiter.retry_after(key)
+            if retry_after is not None:
+                raise RateLimitError(retry_after)
+
     auth = AuthService(db)
     user = await auth.authenticate_user(payload.username, payload.password)
     audit = AuditRepository(db)
 
     if user is None:
+        if settings.AUTH_RATE_LIMIT_ENABLED:
+            login_rate_limiter.record_failure(user_key)
+            login_ip_rate_limiter.record_failure(ip_key)
         # Record the failed attempt and commit explicitly — raising below
         # makes the request session roll back any pending changes.
         await audit.log_event(
@@ -95,6 +114,9 @@ async def login(
         )
         await db.commit()
         raise AuthenticationError("Invalid username or password")
+
+    if settings.AUTH_RATE_LIMIT_ENABLED:
+        login_rate_limiter.clear(user_key)
 
     user.last_login = datetime.now(timezone.utc)
     token, expires_in = auth.create_token(user)

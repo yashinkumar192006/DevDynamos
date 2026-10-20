@@ -45,7 +45,9 @@ gateway.
    installed; `pip install -e sdk` works too):
 
    ```powershell
-   python examples/demo_end_to_end.py
+   python examples/demo_end_to_end.py     # or any file in the table below
+   python examples/agent_full_flow.py     # full governed sequence + fail-closed
+   python examples/devhost_demo.py        # ten-scenario DEVHOST demonstration
    ```
 
 ## The examples
@@ -56,6 +58,8 @@ gateway.
 | [`simple_agent.py`](simple_agent.py) | `sarah.chen` (HR manager) | **1. Simple existing Python agent** — its one protected lookup method now calls the gateway. |
 | [`tool_connector_agent.py`](tool_connector_agent.py) | `eve.johnson` (support agent) | **2. Agent with a tool / data connector** — the tool is wrapped; masking applies per policy. |
 | [`llm_precheck_agent.py`](llm_precheck_agent.py) | `sarah.chen` (HR manager) | **3. Gateway pre-flight before the agent's own LLM** — blocked/injection attempts never reach the model. |
+| [`agent_full_flow.py`](agent_full_flow.py) | `sarah.chen` (HR manager) | **Full governed sequence** — intent → SDK → identity/policy → retrieval → transformations → approved context → mock LLM → output guard; plus a blocked injection attempt and a gateway-unreachable fail-closed check. |
+| [`devhost_demo.py`](devhost_demo.py) | six seeded roles | **DEVHOST demonstration** — ten scenarios (intern BLOCK, HR ALLOW, analyst AGGREGATE, customer isolation, injection, audit, SDK, browser) with expected vs actual output. Runbook: [`../docs/devhost-demo.md`](../docs/devhost-demo.md). |
 | [`http/README.md`](http/README.md) | any | **4. Generic HTTP integration** for non-Python agents (curl / JavaScript / PowerShell). |
 
 Demo passwords for the seeded identities live in `backend/app/seed.py`

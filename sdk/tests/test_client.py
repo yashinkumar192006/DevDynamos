@@ -342,6 +342,42 @@ def test_password_login_failure_raises_authentication_error():
             )
 
 
+def test_login_timeout_raises_request_timeout_not_raw_httpx():
+    """A down gateway during password login must surface a typed SDK error."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("login timed out")
+
+    with ContextShieldClient(
+        base_url=BASE,
+        username="natalie.brooks",
+        password=PASSWORD,
+        timeout=1.0,
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        with pytest.raises(RequestTimeoutError):
+            client.secure_request(
+                resource="order_records", data_fields=["status"], purpose="order_status"
+            )
+
+
+def test_login_transport_error_raises_gateway_unavailable():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused during login")
+
+    with ContextShieldClient(
+        base_url=BASE,
+        username="natalie.brooks",
+        password=PASSWORD,
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        with pytest.raises(GatewayUnavailableError) as excinfo:
+            client.secure_request(
+                resource="order_records", data_fields=["status"], purpose="order_status"
+            )
+    assert BASE in str(excinfo.value)
+
+
 def test_expired_token_triggers_one_relogin_and_retry():
     calls: list[str] = []
 

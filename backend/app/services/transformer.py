@@ -410,6 +410,10 @@ class AggregateGuard:
         history.append(now)
         return True
 
+    def reset(self) -> None:
+        """Drop all recorded history (tests / administrative resets)."""
+        self._history.clear()
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Transformer

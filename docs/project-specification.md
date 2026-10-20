@@ -1,8 +1,8 @@
 # ContextShield — Project Specification
 
-> **Version:** 1.0.0  
-> **Status:** Draft — Pre-implementation  
-> **Last Updated:** 2026-10-18  
+> **Version:** 1.1.0  
+> **Status:** Reference specification — implemented; reconciled with the release  
+> **Last Updated:** 2026-10-20  
 > **Team:** DevDynamos — DEVHOST Hackathon 2026
 
 ---

@@ -1,8 +1,13 @@
 # ContextShield — Security Model & Threat Analysis
 
-> **Version:** 1.0.0  
-> **Status:** Draft — Pre-implementation  
-> **Last Updated:** 2026-10-18
+> **Version:** 1.1.0  
+> **Status:** Implemented (Prompts 1–11) — evidence in `docs/verification-report.md`  
+> **Last Updated:** 2026-10-19
+
+> **Reading note:** this document describes the security model *as built*.
+> Controls listed as deferred (marked **v2**) are explicitly out of scope
+> for the current implementation and are tracked in the verification
+> report's remaining-limitations section.
 
 ---
 
@@ -46,7 +51,7 @@ ContextShield operates on seven foundational security principles:
 | T-05  | Protected data retrieved before permission checks         | HIGH   | Data connector fetches AFTER policy evaluation           |
 | T-06  | Unauthorized data entering model prompts                  | HIGH   | Safe AI Context only contains policy-approved fields     |
 | T-07  | PII leaking through LLM responses                        | HIGH   | Output Privacy Guard scans all LLM output                |
-| T-08  | PII leaking through logs                                  | MEDIUM | Hash-only audit logs; structlog sanitization             |
+| T-08  | PII leaking through logs                                  | MEDIUM | Audit records store no raw values; log sanitizer redacts sensitive keys |
 | T-09  | Small-group inference in aggregate analytics              | MEDIUM | k-anonymity threshold (k≥5) for aggregation             |
 | T-10  | Repeated-query inference (mosaic effect)                  | MEDIUM | Session disclosure tracking + escalation trigger         |
 | T-11  | Fail-open behavior on policy check failures               | HIGH   | Fail-closed default; BLOCK on any error                  |
@@ -54,7 +59,7 @@ ContextShield operates on seven foundational security principles:
 | T-13  | SQL injection through request parameters                  | HIGH   | Pydantic validation + SQLAlchemy parameterized queries   |
 | T-14  | CORS bypass                                               | MEDIUM | Explicit origin allowlist in backend config              |
 | T-15  | Timing attacks on auth                                    | LOW    | bcrypt timing-safe comparison; uniform auth failure responses |
-| T-16  | Denial of service                                         | MEDIUM | Rate limiting middleware (v2); request timeout           |
+| T-16  | Denial of service                                         | MEDIUM | Login throttling (per-account + per-IP sliding window); provider call timeout |
 
 ---
 
@@ -202,19 +207,21 @@ User query (untrusted) → Context Analyzer (extracts structured fields)
 
 ### 4.2 Token Contents
 
-| Claim  | Value                     | Purpose                           |
-|--------|---------------------------|-----------------------------------|
-| `sub`  | User UUID                 | Identify the authenticated user   |
-| `exp`  | Timestamp (30 min ahead)  | Token expiry                      |
-| `iat`  | Timestamp (now)           | Issued-at for audit               |
-| `type` | `"access"`                | Token type identifier             |
+| Claim      | Value                     | Purpose                           |
+|------------|---------------------------|-----------------------------------|
+| `sub`      | User id (database pk)     | Identify the authenticated user   |
+| `username` | Login name                | Display/correlation only          |
+| `exp`      | Timestamp (30 min ahead)  | Token expiry                      |
+| `iat`      | Timestamp (now)           | Issued-at for audit               |
+| `jti`      | Random token id           | Future denylist support           |
+| `typ`      | `"access"`                | Token type identifier             |
 
 **Not included in token:** role, department, clearance, permissions. These are always read from the database on every request to ensure they reflect current state.
 
 ### 4.3 Password Storage
 
-- Algorithm: bcrypt (via passlib)
-- Rounds: 12 (default)
+- Algorithm: bcrypt (direct `bcrypt` library; passlib is deliberately not used — incompatible with bcrypt ≥ 5)
+- Rounds: 12 (library default)
 - Timing-safe comparison: yes
 - Never stored in plaintext, never logged
 
@@ -299,20 +306,49 @@ All errors return a consistent JSON structure:
 
 ---
 
-## 8. Security Checklist for Implementation
+## 8. Security Checklist — Verification Status
 
-- [ ] JWT secret is loaded from environment variable, never hardcoded
-- [ ] Password hashing uses bcrypt with ≥12 rounds
-- [ ] All protected endpoints use FastAPI `Depends(get_current_user)`
-- [ ] User roles are read from database, never from request body or JWT
-- [ ] Policy engine catches all exceptions and returns BLOCK
-- [ ] Data connector receives PolicyDecision[] and queries only permitted fields
-- [ ] Audit records hash all values with SHA-256
-- [ ] structlog processors sanitize sensitive field names
-- [ ] Error responses never contain stack traces, table names, or internal details
-- [ ] CORS allowlist is explicit (no wildcard `*`)
-- [ ] LLM adapter sends only transformed data, never raw field values
-- [ ] Output guard scans all LLM responses before returning to client
-- [ ] Aggregation enforces k≥5 minimum group size
-- [ ] Mosaic detector tracks session-level cumulative disclosures
-- [ ] All security tests run in CI on every push
+All items are implemented and asserted by automated tests (`backend/tests`,
+`sdk/tests`, `frontend/e2e`); evidence and exact commands live in
+`docs/verification-report.md`.
+
+- [x] JWT secret is loaded from environment variable, never hardcoded
+      (required setting; no default — verified by `test_secrets_have_no_insecure_defaults`)
+- [x] Password hashing uses bcrypt with ≥12 rounds
+      (verified by `test_password_hashes_are_salted_bcrypt`)
+- [x] All protected endpoints use FastAPI `Depends(...)` auth
+      (verified by per-router 401 tests, incl. `test_v12_audit_endpoints_enforce_permissions`)
+- [x] User roles are read from database, never from request body or JWT
+      (verified by `test_v06_frontend_supplied_roles_and_forged_tokens_cannot_elevate`)
+- [x] Policy engine catches all exceptions and returns BLOCK
+      (verified by `test_v10_failures_never_fail_open`)
+- [x] Data connector receives field decisions and queries only permitted fields;
+      blocked requests perform no protected retrieval
+      (verified by `test_v02_blocked_request_does_no_retrieval_and_no_model_call`)
+- [x] Audit records contain **no raw values at all** (identifiers, reason codes,
+      policy versions, transformation types, model metadata only) — stronger
+      than the original "hash all values" intent
+      (verified by V03/V09 detailed assertions)
+- [x] structlog processors sanitize sensitive field names
+      (`app/core/logging.py:sanitize_event_dict`; verified by
+      `test_log_sanitizer_redacts_sensitive_keys` and V11)
+- [x] Error responses never contain stack traces, table names, or internal details
+      (generic 500 body; verified by `test_unhandled_exception_returns_generic_500`)
+- [x] CORS allowlist is explicit (no wildcard `*`)
+      (verified by `test_cors_allowlist_enforced`)
+- [x] LLM adapter sends only transformed data, never raw field values
+      (verified by `test_v08_unauthorized_fields_absent_from_model_context`)
+- [x] Output guard scans all LLM responses before returning to client
+      (verified by `test_v09_sensitive_model_output_handled_by_guard`)
+- [x] Aggregation enforces k≥5 minimum group size
+      (verified by V04 small-group suppression)
+- [x] Mosaic detector tracks cumulative disclosures — process-wide window
+      across requests (verified by V04 repeated-query escalation)
+- [x] Login throttling: per-account+address and per-address failure windows
+      with `429` + `Retry-After`
+      (verified by `test_repeated_failed_logins_are_throttled`,
+      `test_ip_backstop_catches_username_rotation`)
+- [x] All security tests run in CI on every push
+      (`.github/workflows/ci.yml`: backend `pytest`, SDK `pytest`, frontend
+      lint/type-check/build; the Playwright suite runs against a seeded
+      PostgreSQL service)

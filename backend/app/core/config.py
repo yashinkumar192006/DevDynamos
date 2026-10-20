@@ -35,6 +35,16 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = Field("HS256")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(30)
 
+    # Authentication throttling — protects the login endpoint against
+    # online credential guessing. Failure-only sliding window: successful
+    # sign-ins are never limited, and a success clears the counter for
+    # its key (username + peer address). Per-process state; see
+    # ``app/core/rate_limit.py`` for the documented limitations.
+    AUTH_RATE_LIMIT_ENABLED: bool = Field(True)
+    AUTH_RATE_LIMIT_MAX_FAILURES: int = Field(10, ge=1)
+    AUTH_RATE_LIMIT_IP_MAX_FAILURES: int = Field(50, ge=1)
+    AUTH_RATE_LIMIT_WINDOW_SECONDS: int = Field(60, ge=1)
+
     # CORS
     CORS_ORIGINS: List[str] = Field(
         default_factory=lambda: ["http://localhost:5173"]

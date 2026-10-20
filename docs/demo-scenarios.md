@@ -1,8 +1,8 @@
 # ContextShield — Demo Scenarios
 
-> **Version:** 1.0.0  
-> **Status:** Draft — Pre-implementation  
-> **Last Updated:** 2026-10-18
+> **Version:** 1.1.0  
+> **Status:** Implemented — scenarios covered by the demo runner, examples, and tests  
+> **Last Updated:** 2026-10-20
 
 ---
 
@@ -587,33 +587,66 @@ his contributions. His SSN is 123-45-6789 and he lives at 456 Oak Street.
 
 ## 4. Frontend Demo Flows
 
-### Flow 1: Login → Dashboard → Secure Request → Audit Trail
+The flows below match the implemented console (`frontend/`). Everything
+shown is produced by the real backend — the console never decides anything
+itself.
+
+### Flow 1: Login → Dashboard → Simulator → Audit Trail
 
 ```text
-1. User opens the app → Login page
-2. Select a demo user (dropdown) or enter credentials
-3. Dashboard shows: overview metrics, recent events, policy stats
-4. Navigate to "Test Request" page
-5. Fill in: fields, purpose, target entity
-6. Submit → see the full per-field decision breakdown
-7. Navigate to "Audit Log" → see the new event
-8. Click the event → see full decision details
+1. Open http://localhost:5173 → Login page
+2. Pick a demo identity (prefills the form) or type credentials, then Sign in
+3. Dashboard (/dashboard): visibility-scoped metrics, decisions-per-day
+   chart, recent decisions, provider health, policy stats
+4. Open Privacy Simulator (/simulator)
+5. Choose a scenario (or build a request: resource, fields, purpose,
+   target entity, session id)
+6. Submit → the result panel shows decision, reason codes, per-field
+   actions with released values, model usage, and the audit reference
+7. Follow the audit reference (or open /audit) → the new event is listed
+8. Click the event → full explainability: per-field decisions, policy
+   versions, transformations, model/guard metadata
 ```
 
 ### Flow 2: Role Comparison Demo
 
 ```text
-1. Login as Alice Chen (HR Manager) → request salary → ALLOW
-2. Log out → login as Dave Kumar (Employee) → same request → BLOCK
-3. Side-by-side comparison of the two responses
-4. Demonstrates that context (role) determines the outcome
+1. Login as sarah.chen (hr_manager) → run "HR salary review" → ALLOW
+2. Log out → login as mia.torres (marketing_intern) → run
+   "Intern peeks at salary" → BLOCK (INSUFFICIENT_ROLE)
+3. Compare the two result panels: same request shape, role decides
+4. Bonus: natalie.brooks (customer) → own order ALLOW vs. another
+   customer's record BLOCK
 ```
 
 ### Flow 3: Policy Explorer
 
 ```text
-1. Navigate to "Policies" page
-2. See all active norms with their rules
-3. Filter by role or data type
-4. Understand which norms apply to which scenarios
+1. Navigate to Policies (/policies)
+2. See active norms with resource patterns, required roles, purposes,
+   allowed actions, and priority
+3. Filter by resource (engine-style pattern matching) or required role
+4. Admins can also include inactive/superseded versions — the toggle is
+   hidden for everyone else, and the backend returns 403 regardless
+```
+
+### Flow 4: Data Assets & Classifications
+
+```text
+1. Navigate to Data Assets (/assets)
+2. Expand an asset to see field-level classifications (sensitivity, PII
+   category, backing column)
+3. Filter by sensitivity (e.g. restricted) to show the high-risk surfaces
+4. Note: the catalogue is metadata only — no record values are returned
+```
+
+### Flow 5: Authorization-Aware Views & Session Handling
+
+```text
+1. Same pages show different data per identity: natalie's dashboard is
+   "Own events only"; sarah's is "Privacy trail"; admin sees the full trail
+2. Out-of-scope filters (e.g. other actors' requester ids) return 403 and
+   are surfaced, not hidden
+3. An expired/revoked token redirects to /login with a session notice —
+   no cached data remains
 ```

@@ -5,7 +5,7 @@
 [![CI](https://github.com/yashinkumar192006/DevDynamos/actions/workflows/ci.yml/badge.svg)](https://github.com/yashinkumar192006/DevDynamos/actions)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688.svg)](https://fastapi.tiangolo.com/)
-[![React](https://img.shields.io/badge/React-18%2B-61DAFB.svg)](https://react.dev/)
+[![React](https://img.shields.io/badge/React-19%2B-61DAFB.svg)](https://react.dev/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791.svg)](https://www.postgresql.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -24,7 +24,20 @@
 - [API Endpoints](#-api-endpoints)
 - [Use Cases & Examples](#-use-cases--examples)
 - [Security Principles](#-security-principles)
+- [Verification & Release](#-verification--release)
 - [Team](#-team)
+- [License](#-license)
+
+---
+
+> **Verified release status (2026-10-20):** backend 335 passed / 0 failed /
+> 0 skipped · SDK 32 passed + 2 opt-in skips (clean-environment install
+> verified) · frontend lint, type-check, and production build pass ·
+> Playwright 12/12 against the real backend · Docker images build and a fresh
+> compose stack applied migrations, seeded idempotently, and served both apps.
+> **Not deployed**: no remote application, database, or paid resource was
+> created. Exact commands, evidence, and limitations:
+> [`docs/release-report.md`](docs/release-report.md).
 
 ---
 
@@ -125,18 +138,24 @@ ContextShield is a **privacy enforcement middleware** that sits between AI agent
    - "Support agents MAY access customer phone numbers WHEN resolving active tickets"
    - "No one MAY access raw SSNs through the AI agent interface"
 
-5. **Privacy Enforcement** — Based on the policy decision:
-   - **ALLOW** — data passes through unchanged
-   - **REDACT** — sensitive fields are removed entirely
-   - **MASK** — partial data shown (e.g., `***-**-1234` for SSN)
-   - **AGGREGATE** — individual values replaced with ranges or averages
-   - **DENY** — request blocked with explanation
+5. **Privacy Enforcement** — Based on the deterministic policy decision:
+   - **ALLOW** — approved fields pass through (values already transformed where required)
+   - **MASK** — value partially hidden (e.g. `****@example.com`)
+   - **TOKENIZE** — value replaced with a stable opaque token
+   - **GENERALIZE** — value coarsened (e.g. exact salary → range)
+   - **AGGREGATE** — statistics only (`mean`, `median`, `count`, `range`); no rows
+   - **BLOCK** — request denied before retrieval/model access, with safe reason codes
+   - **ESCALATE** — human approval required (for example repeated aggregate disclosures)
+
+   Overall decisions are `ALLOW`, `PARTIAL_ALLOW`, `BLOCK`, or
+   `ESCALATION_NEEDED`. Policy conflict resolution is deterministic and
+   deny-by-default.
 
 6. **Audit Logging** — Every decision is logged with:
    - Request context (who, what, why, when)
-   - Policy that was applied
-   - Action taken (allow/redact/mask/deny)
-   - Hashed data values only — **never raw PII in logs**
+   - Policy that was applied and its version
+   - Decision, per-field actions, and reason codes
+   - Transformation *types* only — **never raw values, credentials, tokens, or prompts**
 
 7. **Mosaic Effect Detection** — ContextShield tracks what data has been disclosed across a session. Even if each individual disclosure is safe, the *combination* might not be:
    - Name + Department + Salary range → Could identify an individual
@@ -165,8 +184,8 @@ ContextShield is a **privacy enforcement middleware** that sits between AI agent
                     │ │  Analyzer  │ │
                     │ └─────┬──────┘ │
                     │ ┌─────▼──────┐ │
-                    │ │  Privacy   │ │  ← Redact / Mask / Aggregate
-                    │ │   Guard    │ │
+                    │ │ Privacy   │ │  ← Mask / Tokenize / Generalize
+                    │ │   Guard    │ │     / Aggregate / Block / Escalate
                     │ └─────┬──────┘ │
                     │ ┌─────▼──────┐ │
                     │ │   Audit    │ │  ← Immutable decision log
@@ -179,11 +198,11 @@ ContextShield is a **privacy enforcement middleware** that sits between AI agent
 
 | Layer | Responsibility | Example |
 |-------|---------------|---------|
-| **API Routes** (`api/v1/`) | HTTP request handling, input validation | `POST /api/v1/analyze` |
-| **Schemas** (`schemas/`) | Pydantic request/response models | `ContextRequest`, `PolicyDecision` |
-| **Services** (`services/`) | Business logic, orchestration | `ClassifierService`, `ContextAnalyzer` |
+| **API Routes** (`api/v1/`) | HTTP request handling, input validation | `POST /api/v1/privacy/secure-request` |
+| **Schemas** (`schemas/`) | Pydantic request/response models | `SecureRequestPayload`, `FieldDecision` |
+| **Services** (`services/`) | Business logic, orchestration | `PolicyEngine`, `DataConnectorService`, `SafeLLMService` |
 | **Repositories** (`repositories/`) | Database queries, data access | `UserRepository`, `PolicyRepository` |
-| **Models** (`models/`) | SQLAlchemy ORM table definitions | `User`, `AccessPolicy`, `AuditLog` |
+| **Models** (`models/`) | SQLAlchemy ORM table definitions | `User`, `PrivacyPolicy`, `AuditEvent` |
 | **Core** (`core/`) | Config, security, logging, middleware | JWT handling, structured logging |
 
 ---
@@ -204,9 +223,9 @@ ContextShield is a **privacy enforcement middleware** that sits between AI agent
 
 ### 🔒 Privacy Enforcement
 - **Minimum disclosure principle**: Only the data necessary for the stated purpose is released
-- **Multiple enforcement actions**: Allow, Redact, Mask, Aggregate, Deny
+- **Deterministic enforcement actions**: Allow, Mask, Tokenize, Generalize, Aggregate, Block, Escalate — resolved with a deny-by-default conflict rule
 - **Mosaic effect detection**: Tracks cumulative disclosures to prevent re-identification through data combination
-- **Zero external data transfer**: Raw PII is never sent to external LLMs, APIs, or classifier services
+- **No raw PII leaves the gateway**: external model providers (only when explicitly configured) receive approved, minimized context; blocked fields and raw records are never included. Classification and policy evaluation run locally.
 
 > Decision semantics, mandatory protection floors, aggregate safeguards,
 > tokenization, and policy administration:
@@ -227,11 +246,22 @@ ContextShield is a **privacy enforcement middleware** that sits between AI agent
 - Visibility-scoped server-side: admins see the full trail, compliance roles the privacy pipeline, everyone else only their own events
 - Records are safe by construction — no raw PII, credentials, tokens, prompts, or model outputs
 
+### 🖥️ React Demonstration Console
+- Full frontend (`frontend/`) over the real API: login, dashboard (real aggregated metrics + charts), privacy request simulator, audit trail + explainability detail, policy viewer, data-asset catalogue, system status, and an SDK/integration page
+- **No fake security UI**: the frontend never decides, redacts, or role-checks — every decision, mask, and audit entry is produced by the backend; blocked values never reach the browser
+- Demo identity selector only prefills the login form with seeded accounts — authentication and role resolution stay server-side
+- Authorization-aware rendering (scope banners, admin-only controls), loading/empty/error states everywhere, and fail-closed behaviour when the gateway is unreachable
+- Playwright end-to-end journeys run against the real backend (login, simulate ALLOW/BLOCK, inspect the audit trail, session expiry, SDK page deep links, scope isolation)
+
+> Console architecture, scripts, and E2E setup:
+> [`frontend/README.md`](frontend/README.md)
+
 ### 🧩 Python SDK & Integration
-- Typed, dependency-light Python SDK (`sdk/contextshield`) over the same HTTP contract any language can call
-- Credentials from environment variables or a credential provider — never hardcoded; configurable timeouts, controlled error types, safe logging
+- Typed, dependency-light Python SDK (`sdk/contextshield`, **v0.1.0**) over the same HTTP contract any language can call
+- Credentials from environment variables or a credential provider — never hardcoded; configurable timeouts, typed errors, safe logging, mock-transport tests
 - `BLOCK` / `ESCALATION_NEEDED` decisions arrive as first-class typed results with explicit handling (no exceptions required)
-- Runnable integration examples: simple agent, tool/data connector, LLM pre-flight, and generic non-Python HTTP
+- Runnable integration examples: simple agent, tool/data connector, LLM pre-flight, full governed agent flow, ten-scenario DEVHOST demo, and generic non-Python HTTP
+- Install in a clean environment: `pip install sdk` (from the repository); verified alongside the live gateway
 
 > Integration contract, patterns, and the honest security boundary:
 > [`docs/integration-guide.md`](docs/integration-guide.md) · runnable examples in
@@ -243,9 +273,20 @@ ContextShield is a **privacy enforcement middleware** that sits between AI agent
 - Service-account API keys for AI agents / backend services (`X-API-Key`) — client-supplied headers like `X-User-Id` are never trusted
 - Secure password hashing with bcrypt; secrets only in environment variables
 - Demo user seeding for development and testing
+- Login throttling: failure-only sliding windows (per account+address and per address) with `429` + `Retry-After`
 
 > Architecture, error semantics, service accounts, and React integration guidance:
 > [`docs/authentication.md`](docs/authentication.md)
+
+### 🛡️ Security Hardening & Verification
+- Every response carries a server-generated `X-Request-ID` (correlation only — never accepted from the client)
+- Structured-log sanitizer redacts sensitive keys (`password`, `token`, `api_key`, PII fields) before any log line is emitted
+- All unhandled errors return a generic `500` body — exception messages (which can embed values) go only to the server-side log, as a class name + request id
+- The mosaic brake is process-wide: repeated aggregate disclosures escalate across requests, not just within one
+- Hostile input cannot break audit writes: identifiers are clamped to storage bounds at the repository boundary
+- **Verification reports** — exact commands, pass/fail counts, scenario mapping, and remaining limitations:
+  [`docs/verification-report.md`](docs/verification-report.md) ·
+  [`docs/release-report.md`](docs/release-report.md)
 
 ---
 
@@ -258,7 +299,9 @@ ContextShield is a **privacy enforcement middleware** that sits between AI agent
 | **ORM** | SQLAlchemy 2.x (async) | Type-safe queries, Alembic migrations |
 | **NLP / PII** | Microsoft Presidio + spaCy | Production-grade entity recognition |
 | **Auth** | python-jose (JWT) + bcrypt | Industry-standard token auth |
-| **Frontend** | React + Vite + TypeScript | Fast dev experience, type safety |
+| **Frontend** | React 19 + Vite + TypeScript + Tailwind CSS 4 | Fast dev experience, type safety |
+| **Charts** | Recharts | Dashboard decision visualisation |
+| **E2E tests** | Playwright | Critical journeys against the real backend |
 | **Logging** | structlog | Structured, context-aware JSON logging |
 | **Containers** | Docker + Docker Compose | Reproducible environments |
 | **CI/CD** | GitHub Actions | Automated testing on every push |
@@ -269,35 +312,45 @@ ContextShield is a **privacy enforcement middleware** that sits between AI agent
 
 ```
 contextshield/
-├── frontend/                  # React + Vite + TypeScript SPA
-│
 ├── backend/
 │   ├── app/
-│   │   ├── api/v1/            # Versioned API route handlers
-│   │   ├── core/              # Config, security, logging, middleware
-│   │   ├── models/            # SQLAlchemy ORM models
-│   │   ├── schemas/           # Pydantic request/response schemas
-│   │   ├── repositories/      # Database access layer (queries)
-│   │   ├── services/          # Business logic & orchestration
-│   │   │   ├── classifier.py  # Sensitive data classification engine
-│   │   │   └── context_service.py  # Context analyzer
-│   │   └── main.py            # FastAPI application entry point
-│   ├── alembic/               # Database migration scripts
-│   ├── tests/                 # Backend unit & integration tests
-│   ├── requirements.txt       # Python dependencies
-│   └── Dockerfile
+│   │   ├── api/v1/           # Versioned API route handlers
+│   │   ├── core/             # Config, security, logging, middleware
+│   │   ├── models/           # SQLAlchemy ORM models
+│   │   ├── schemas/          # Pydantic request/response schemas
+│   │   ├── repositories/     # Database access layer (queries)
+│   │   ├── services/         # Policy engine, classification, retrieval,
+│   │   │                     #   transformations, LLM adapter, output guard, audit
+│   │   ├── main.py           # FastAPI application entry point
+│   │   ├── seed.py           # Idempotent synthetic demo seed
+│   │   └── check_db.py       # Bounded database-readiness probe
+│   ├── alembic/              # Database migration scripts
+│   ├── tests/                # Backend unit & integration tests
+│   ├── scripts/              # One-time database bootstrap SQL
+│   ├── Dockerfile            # Non-root production image
+│   ├── docker-entrypoint.sh  # Wait for DB → migrate → optional seed
+│   └── requirements.txt
 │
-├── sdk/                       # Reusable client library / SDK
-├── policies/                  # Privacy policy definition files
-├── database/seed/             # Database seed scripts (demo data)
-├── examples/                  # Usage examples & tutorials
-├── docs/                      # Project documentation
-├── tests/                     # End-to-end / integration tests
+├── frontend/
+│   ├── src/                  # React + TypeScript console (pages, components, API)
+│   ├── e2e/                  # Playwright journeys against the real backend
+│   ├── Dockerfile            # Vite dev-server image used by compose
+│   ├── vercel.json           # SPA deep-link rewrite for static hosting
+│   └── package.json
 │
-├── .github/workflows/ci.yml   # GitHub Actions CI pipeline
-├── .env.example               # Environment variable template
-├── .gitignore                 # Git ignore rules
-├── docker-compose.yml         # Multi-service orchestration
+├── sdk/
+│   ├── contextshield/        # Typed Python client (v0.1.0, py.typed)
+│   └── tests/                # Mock-transport tests + opt-in live tests
+│
+├── examples/                 # Agent integrations + DEVHOST demonstration
+├── docs/                     # Architecture, security, API, deployment, reports
+├── database/                 # Reserved placeholder (seed lives in backend/app/seed.py)
+├── policies/                 # Reserved placeholder (policies are seeded from code)
+├── tests/                    # Reserved placeholder (suites live in backend/, sdk/, frontend/e2e)
+│
+├── .github/workflows/ci.yml  # GitHub Actions: backend, SDK, frontend, E2E
+├── .env.example              # Safe environment template
+├── docker-compose.yml        # PostgreSQL + backend + frontend
 └── README.md
 ```
 
@@ -323,10 +376,14 @@ cd DevDynamos
 
 ### 2. Configure Environment
 
-```bash
-cp .env.example .env
-# Edit .env with your database credentials and JWT secret
+```powershell
+Copy-Item .env.example .env
+# Set DATABASE_URL and a long random JWT_SECRET in .env.
+# Backend secrets stay in .env; frontend overrides go in frontend/.env.local.
 ```
+
+`.env.example` contains placeholders only. Never commit `.env`, provider keys,
+or real credentials.
 
 ### 3. Database Setup
 
@@ -357,6 +414,7 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements.txt
+python -m spacy download en_core_web_sm   # NLP model; optional (rules still work)
 
 # Start the API server
 uvicorn app.main:app --reload
@@ -364,7 +422,9 @@ uvicorn app.main:app --reload
 
 The API will be available at `http://localhost:8000`.
 
-API documentation: `http://localhost:8000/docs` (Swagger UI).
+Swagger UI: `http://localhost:8000/docs` · ReDoc: `/redoc` · schema:
+`/openapi.json`. Use **Authorize** with a login token (Bearer) or a
+service-account key (`X-API-Key`) to call protected endpoints.
 
 ### 5. Frontend Setup
 
@@ -374,15 +434,45 @@ npm install
 npm run dev
 ```
 
-The UI will be available at `http://localhost:5173`.
+The UI will be available at `http://localhost:5173` and talks to the
+backend at `http://localhost:8000` (override with `VITE_API_BASE_URL` —
+**origin only**, no `/api/v1`; see `frontend/.env.example`; frontend
+environment files must never contain secrets).
+
+Sign in with any seeded demo account (the login page offers one-click
+prefill — credentials still go through the real login endpoint). A good
+demo order: **Dashboard → Privacy Simulator (try the blocked scenarios) →
+Audit Events → Policies → Data Assets → System Status → SDK & Integration**.
+
+End-to-end journeys (requires the backend running with the seeded DB):
+
+```powershell
+npx playwright install chromium   # one-time
+npm run e2e
+```
 
 ### 6. Docker (Alternative — All Services)
 
-```bash
-docker compose up --build
+```powershell
+Copy-Item .env.example .env   # only if .env does not exist yet
+docker compose up --build -d
+docker compose ps
+docker compose logs -f backend
 ```
 
-This starts PostgreSQL, the backend, and the frontend in containers.
+Compose starts PostgreSQL (health-checked), the backend (waits for the DB,
+applies Alembic migrations, then seeds synthetic demo data idempotently), and
+the frontend. Services: UI `http://localhost:5173`, API
+`http://localhost:8000`; override `DATABASE_PORT`, `BACKEND_PORT`, or
+`FRONTEND_PORT` if they conflict. The frontend container receives **only**
+`VITE_API_BASE_URL` — backend secrets are never injected into it. Set
+`SEED_ON_START=false` to skip demo seeding.
+
+`docker compose down` preserves the `pgdata` volume; `down -v` deletes the
+local database and must be used only intentionally on throwaway data.
+
+> Startup behavior, Render/Vercel deployment, migrations, and troubleshooting:
+> [`docs/deployment.md`](docs/deployment.md)
 
 ---
 
@@ -401,6 +491,14 @@ This starts PostgreSQL, the backend, and the frontend in containers.
 | `POST` | `/api/v1/privacy/secure-request` | Governed data request: policy evaluation, minimum-disclosure transforms, optional inspected model stage |
 | `GET` | `/api/v1/audit/events` | Query the audit trail (visibility-scoped, filterable, paginated) |
 | `GET` | `/api/v1/audit/events/{id}` | Full explainability for one recorded decision |
+| `GET` | `/api/v1/dashboard/overview` | Real dashboard metrics aggregated from the visible audit trail |
+| `GET` | `/api/v1/policies` | List active privacy policies (inactive history: admins only) |
+| `GET` | `/api/v1/data/assets` | Data-asset catalogue with field classifications (metadata only) |
+
+Interactive contract: Swagger UI at `/docs`, ReDoc at `/redoc`, raw schema at
+`/openapi.json`. Authorize with a Bearer token from `/api/v1/auth/login` or a
+service-account `X-API-Key`; login tokens expire after 30 minutes by default.
+The OpenAPI schema is the authoritative path list.
 
 ### Example: Login
 
@@ -486,6 +584,18 @@ Over multiple queries, a user obtains: department → role → salary range → 
 - **Mosaic detector** flags: combination of department + salary range + name = potential re-identification risk
 - **Result**: Warning issued, escalation required for further queries.
 
+### Run the full demonstration
+
+```powershell
+# Backend + seeded DB running; from the repository root:
+python examples/devhost_demo.py       # 10 scenarios, expected vs actual
+python examples/agent_full_flow.py    # full governed agent sequence + fail-closed
+```
+
+The DEVHOST runbook, recorded results, and browser walkthrough:
+[`docs/devhost-demo.md`](docs/devhost-demo.md). The automated frontend
+equivalent is `npm run e2e` in `frontend/`.
+
 ---
 
 ## 🔐 Security Principles
@@ -494,15 +604,33 @@ Over multiple queries, a user obtains: department → role → salary range → 
 
 2. **Schema annotations are authoritative** — Database field metadata (sensitivity levels, classifications) override NLP detection. NLP is a signal, not a decision-maker.
 
-3. **Minimum disclosure** — Only the data strictly necessary for the verified purpose is released. When in doubt, redact.
+3. **Minimum disclosure** — Only the data strictly necessary for the verified purpose is released. When in doubt, block.
 
-4. **No external PII transfer** — Raw sensitive data is never sent to external LLMs, third-party classifiers, or any external API. All classification happens locally.
+4. **Raw PII stays local** — Raw sensitive data is never sent to external LLMs, third-party classifiers, or any external API. Classification happens locally; a live model provider (only when configured) receives approved, minimized context after authorization and transformation. The default provider is an offline deterministic mock.
 
-5. **Audit everything** — Every access decision is logged immutably. Logs contain hashed values only — never raw PII.
+5. **Audit everything** — Every access decision is logged immutably. Audit records contain identifiers, reason codes, policy versions, and transformation types — never raw values, credentials, tokens, or prompts.
 
-6. **Defense in depth** — Multiple layers of protection: authentication → role check → context validation → policy evaluation → output filtering.
+6. **Defense in depth** — Multiple layers of protection: authentication → role check → context validation → policy evaluation → minimum-disclosure transformations → output guard.
 
-7. **Fail closed** — If context is ambiguous or a policy can't be resolved, the default action is DENY, not ALLOW.
+7. **Fail closed** — If context is ambiguous or a policy can't be resolved, the default action is **BLOCK**, never ALLOW.
+
+---
+
+## ✅ Verification & Release
+
+| Area | Last result |
+|---|---|
+| Backend suite | 335 passed, 0 failed, 0 skipped |
+| SDK suite (offline) | 32 passed, 2 skipped (opt-in live tests) |
+| Clean-environment SDK install | PASS (`pip install sdk`, `pip check`, live request) |
+| Frontend lint / type-check / production build | PASS |
+| Playwright E2E (real backend) | 12 passed |
+| Docker images | PASS (non-root, migrations + idempotent seed verified) |
+| Deployment | **NOT DEPLOYED** — manual steps in `docs/deployment.md` |
+
+Full evidence, PASS/FAIL/BLOCKED items, and known limitations:
+[`docs/release-report.md`](docs/release-report.md) ·
+[`docs/verification-report.md`](docs/verification-report.md).
 
 ---
 

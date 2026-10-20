@@ -14,11 +14,15 @@ or agent framework can integrate with directly.
 From the repository root:
 
 ```powershell
-pip install -e sdk
+pip install -e sdk        # editable
+pip install sdk           # or a regular install from the local package
 ```
 
-Distribution via a package registry is prepared (`pyproject.toml`, typed
-package with `py.typed`) but not yet published.
+Package: **`contextshield` 0.1.0** (Alpha), typed (`py.typed`), depends only on
+`httpx`, requires Python ≥ 3.10. Distribution via a package registry is
+prepared (`pyproject.toml`) but not yet published. Verified in a clean virtual
+environment: install exit 0, `pip check` clean, `py.typed` present, and a live
+`secure_request` returned a typed `ALLOW` with request/audit ids.
 
 ## Quick start
 
@@ -121,9 +125,12 @@ client = ContextShieldClient(base_url, api_key=..., timeout=5.0, max_retries=1)
 ```
 
 * `timeout` accepts seconds or an `httpx.Timeout`.
-* `max_retries` applies to **transport errors only** (connection/timeout) and
-  is `0` by default. Retried requests may appear as duplicate attempts in the
-  gateway audit trail.
+* `max_retries` applies to **transport errors** (connection/DNS/TLS) and is `0`
+  by default. Request timeouts surface immediately as `RequestTimeoutError`.
+  Retried requests may appear as duplicate attempts in the gateway audit trail.
+* Transport failures during the password-login call map to the same typed
+  errors (`GatewayUnavailableError` / `RequestTimeoutError`) — raw `httpx`
+  exceptions never escape the SDK.
 * Logging (logger name `contextshield`) records method, path, status,
   duration and `request_id` — never credentials, headers, or bodies.
 
@@ -134,7 +141,12 @@ cd sdk
 ..\backend\.venv\Scripts\python.exe -m pytest tests -q
 ```
 
-The suite is self-contained (simulated gateway via `httpx.MockTransport`).
-Opt-in live tests run against a real gateway when
+Last run: **32 passed, 2 skipped** (the skips are the opt-in live-gateway
+tests). The offline suite is self-contained (simulated gateway via
+`httpx.MockTransport`). Opt-in live tests run against a real gateway when
 `CONTEXTSHIELD_LIVE_GATEWAY_URL` (+ live credentials) is set — see
 `tests/test_live_gateway.py`.
+
+Integration examples that use this SDK live in
+[`../examples/`](../examples/), including the ten-scenario DEVHOST
+demonstration ([`../docs/devhost-demo.md`](../docs/devhost-demo.md)).

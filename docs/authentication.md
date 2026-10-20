@@ -88,6 +88,13 @@ WWW-Authenticate: Bearer
 Login attempts (success **and** failure) are written to the audit trail —
 usernames only, never passwords.
 
+**Throttling:** repeated failures for the same username + client address
+return `429` with a `Retry-After` header (failure-only sliding window,
+`AUTH_RATE_LIMIT_*` settings; a second counter keyed by address caps
+username-rotation attempts). Successful sign-ins are never throttled and
+clear their own counter. The limiter is per-process and in-memory — see
+§10.
+
 ### 2.2 Token claims
 
 | Claim | Meaning |
@@ -344,6 +351,10 @@ production origin.
 | `JWT_SECRET` | HS256 signing secret | Required; generate with `python -c "import secrets; print(secrets.token_urlsafe(48))"`. Never commit a real value. |
 | `JWT_ALGORITHM` | Signing algorithm | Default `HS256` |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Token lifetime | Default `30` |
+| `AUTH_RATE_LIMIT_MAX_FAILURES` | Failed logins per username+address | Default `10` per window |
+| `AUTH_RATE_LIMIT_IP_MAX_FAILURES` | Failed logins per client address | Default `50` per window |
+| `AUTH_RATE_LIMIT_WINDOW_SECONDS` | Throttling window | Default `60` |
+| `AUTH_RATE_LIMIT_ENABLED` | Master switch for login throttling | Default `true`; disable only for load tests |
 
 ---
 
@@ -354,5 +365,10 @@ production origin.
   user invalidates access immediately, since roles/state are re-resolved per
   request).
 - No server-side token denylist (`jti` exists for a future one).
-- Rate limiting / lockout on repeated failed logins is deferred to the
-  middleware phase.
+- Login throttling is **per-process and in-memory**: with multiple workers
+  or replicas the effective fleet-wide limit multiplies, and limits reset on
+  restart. A shared store (e.g. Redis) is required for a global quota.
+- The per-address counter uses the socket address (no proxy-header trust
+  by design); behind a reverse proxy every client shares the proxy address,
+  so the address cap becomes a coarse global cap — size it accordingly or
+  terminate rate limiting at the proxy.

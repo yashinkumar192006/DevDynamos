@@ -3,17 +3,24 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from ...core.config import settings
 from ...core.database import get_db
+from ...core.logging import logger
 from ...services.classification_service import ClassificationService
 from ...services.llm_adapter import SafeLLMService
 from .auth import router as auth_router
 from .admin import router as admin_router
+from .assets import router as assets_router
 from .audit import router as audit_router
+from .dashboard import router as dashboard_router
+from .policies import router as policies_router
 from .privacy import router as privacy_router
 
 router = APIRouter()
 router.include_router(auth_router)
 router.include_router(admin_router)
+router.include_router(assets_router)
 router.include_router(audit_router)
+router.include_router(dashboard_router)
+router.include_router(policies_router)
 router.include_router(privacy_router)
 
 @router.get("/health", tags=["system"]) 
@@ -38,7 +45,9 @@ async def system_status(db: AsyncSession = Depends(get_db)):
         _ = result.scalar_one()
         db_status = "healthy"
     except Exception as exc:
-        db_status = f"unhealthy: {str(exc)}"
+        # Never surface driver errors to the client: they can disclose
+        # hostnames, ports, or credentials. Only the class is logged.
+        logger.warning("system_status_db_check_failed", error_type=type(exc).__name__)
 
     # LLM adapter status: provider selection, model, key configuration and
     # output-guard mode. Never includes the API key itself.

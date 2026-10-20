@@ -12,14 +12,20 @@ Policy administration: :mod:`app.services.policy_admin`
 LLM adapter & safe AI context: :mod:`app.services.llm_adapter`
 Output privacy guard: :mod:`app.services.output_guard`
 Audit trail queries: :mod:`app.services.audit_service`
+Dashboard aggregation: :mod:`app.services.dashboard_service`
+Policy catalogue: :mod:`app.services.policy_catalog`
+Data-asset catalogue: :mod:`app.services.asset_catalog`
 """
 
 from .auth_service import AuthService, Principal
+from .asset_catalog import DataAssetCatalogService
 from .audit_service import AuditService, AuditVisibility, resolve_visibility
 from .authorization import AccessDecision, AuthorizationService
 from .classification_service import ClassificationService
 from .classifier import SensitiveDataClassifier
 from .context_service import ContextAnalyzer
+from .dashboard_service import DashboardService
+from .policy_catalog import PolicyCatalogService
 from .data_connector import (
     ProtectedDataConnector,
     SecureDataRequest,
@@ -126,4 +132,8 @@ __all__ = [
     "AuditService",
     "AuditVisibility",
     "resolve_visibility",
+    # Dashboard / catalogue
+    "DashboardService",
+    "PolicyCatalogService",
+    "DataAssetCatalogService",
 ]

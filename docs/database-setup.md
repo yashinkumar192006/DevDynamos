@@ -1,12 +1,17 @@
 # ContextShield — Database Setup & Operations
 
-> **Status:** Implemented — SQLAlchemy models, Alembic migration `initial schema`, and synthetic demo seed data are in place.
-> **Last Updated:** 2026-10-18
+> **Status:** Implemented — SQLAlchemy models, Alembic migrations, and synthetic demo seed data are in place.
+> **Last Updated:** 2026-10-20
 
 This document covers the exact local PostgreSQL setup for ContextShield, plus
 recovery procedures. The application **never** connects as the PostgreSQL
 superuser; it uses a dedicated `contextshield_app` account with no
 `SUPERUSER` / `CREATEDB` / `CREATEROLE` privileges.
+
+> The Docker backend entrypoint (compose or a container deployment) waits for
+> PostgreSQL, runs `alembic upgrade head`, and optionally runs the idempotent
+> seed (`SEED_ON_START`). Nothing in the setup or startup path deletes
+> databases, records, or volumes.
 
 | Item | Value (local development) |
 |------|---------------------------|
@@ -124,8 +129,13 @@ python -m alembic upgrade head
 # Useful companions
 python -m alembic current          # which revision is applied
 python -m alembic history          # migration history
-python -m alembic downgrade -1     # roll back one revision
+python -m alembic downgrade -1     # roll back one revision (local dev only)
 ```
+
+The Docker entrypoint runs `alembic upgrade head` automatically when
+`RUN_MIGRATIONS_ON_START=true` (the default). Do not run a manual migration at
+the same time as a starting container unless you have coordinated it; Alembic
+takes a database lock, but concurrent deploy steps add avoidable risk.
 
 Creating a *new* migration after changing models (only when needed — never
 regenerate existing history):
@@ -135,8 +145,7 @@ python -m alembic revision --autogenerate -m "describe the change"
 python -m alembic upgrade head
 ```
 
-> The initial-schema migration is checked in
-> (`backend/alembic/versions/*_initial_schema.py`). Do **not** delete it, and
+> All checked-in migrations are part of the history. Do **not** delete them, and
 > do not re-autogenerate the baseline.
 
 ## 6. Check database connectivity
@@ -154,20 +163,37 @@ Expected output: a green light, the table list, and row counts. If it reports
 python -m app.seed
 ```
 
-The seed is **idempotent** — re-running it creates no duplicates. It inserts:
+The seed is **idempotent** — re-running it creates no duplicates and never
+truncates or deletes existing records. It inserts:
 
 | Category | Count | Examples |
 |----------|-------|----------|
-| Roles / permissions | 8 roles | `hr_manager`, `sales_staff`, `analyst`, … |
-| Users (bcrypt-hashed passwords) | 8 | `admin`, `sarah.chen`, `james.wilson`, … |
+| Roles / permissions | 12 roles | `hr_manager`, `sales_staff`, `analyst`, … |
+| Users (bcrypt-hashed passwords) | 11 | `admin`, `sarah.chen`, `james.wilson`, … |
 | Data assets / classified fields | 5 assets / 35 fields | `employee_salary`, `customer_records`, … |
-| Versioned privacy policies | 7 (incl. v1→v2 history) | `salary_access_policy` |
+| Versioned privacy policies | 12 rows (including version history) | `salary_access_policy` |
 | Employees | 28 | `EMP001` … `EMP027` (SSNs stored as SHA-256 hashes only) |
 | Customers | 10 | `CUS001` … `CUS010` |
 | Orders | 20 | `ORD0001` … `ORD0020` |
 | Business documents | 8 | `DOC001` … `DOC008` (internal/financial) |
 
 All records are fictional. No real employee or customer data is imported.
+
+Verify idempotency without deleting anything:
+
+```powershell
+# From backend/ — run it twice; the second run reports no new records.
+python -m app.seed
+python -m app.seed
+
+# Optional independent check (app role):
+$env:PGPASSWORD = "contextshield_pass"
+& "C:\Program Files\PostgreSQL\18\bin\psql.exe" -U contextshield_app -h localhost `
+    -d contextshield -tAc "select count(*) from users;"   # → 11 both times
+```
+
+The seed is for **synthetic demos and development only**. Never point it at a
+production database that contains real records.
 
 ## 8. Run the database tests
 
@@ -184,20 +210,69 @@ field-level permission projection).
 
 ## Docker alternative
 
-If you prefer not to use a local PostgreSQL install:
+The compose stack runs PostgreSQL 16 with a health check. The backend waits for
+it, applies migrations, and (by default) loads the idempotent synthetic seed:
 
-```bash
-docker compose up db        # postgres:16-alpine from docker-compose.yml
+```powershell
+# From the repository root; requires .env (Copy-Item .env.example .env)
+docker compose up --build -d
+docker compose ps
+docker compose logs -f backend
 ```
 
-or ad hoc (note the different port so it cannot clash with a local server):
+* Ports: `DATABASE_PORT` (5432), `BACKEND_PORT` (8000), `FRONTEND_PORT` (5173).
+  Use overrides to avoid conflicts, e.g.
+  `$env:DATABASE_PORT='55432'; docker compose up -d db backend`.
+* Inside compose the backend connects to host `db`; the host-oriented
+  `DATABASE_URL` in `.env` is intentionally overridden for that container.
+* `SEED_ON_START=false` disables seeding. Migrations always run unless
+  `RUN_MIGRATIONS_ON_START=false`.
+* `docker compose down` **keeps** the `pgdata` volume. Only
+  `docker compose down -v` deletes it — never use that flag on data you need.
+* Compose bootstraps its PostgreSQL container role from `DATABASE_USER` /
+  `DATABASE_PASSWORD` (default `postgres`). That role is the container's
+  superuser; it is a local-development convenience, not the least-privilege
+  production setup described above.
+
+Ad hoc container (different port so it cannot clash with a local server):
 
 ```powershell
 docker run -d --name contextshield-pg `
   -e POSTGRES_USER=contextshield_app -e POSTGRES_PASSWORD=contextshield_pass `
   -e POSTGRES_DB=contextshield -p 5433:5432 postgres:16-alpine
-# then point DATABASE_URL at localhost:5433
+# then point DATABASE_URL at localhost:5433 and run the migration + seed
 ```
+
+---
+
+## Preserving data during ordinary restarts
+
+* `docker compose stop` / `start` / `restart` and `docker compose down`
+  preserve the `pgdata` volume and all rows.
+* Restarting the backend or running `alembic upgrade head` again is a no-op when
+  the database is already at head.
+* Re-running `python -m app.seed` adds nothing and deletes nothing.
+* Application restarts never run destructive SQL. There is no automatic
+  database reset anywhere in the project.
+
+---
+
+## Applying migrations to a deployment database safely
+
+1. Back up the database first (provider snapshot or `pg_dump`). A downgrade is
+   not a backup.
+2. Review the new migration under `backend/alembic/versions/` for destructive
+   operations and long table rewrites.
+3. Pause writes (or scale the API to one instance) during the migration.
+4. Run `python -m alembic upgrade head` from `backend/` using the deployment
+   `DATABASE_URL`.
+5. Confirm `python -m alembic current` reports `(head)` and the API's
+   `/api/v1/system/status` reports `database: healthy`.
+6. Resume traffic and watch error rates and logs.
+
+If a migration must be reversed, restore from the backup or write a tested
+forward fix; do not run `alembic downgrade` against production data without a
+data-preserving plan. Never run `python -m app.seed` against real records.
 
 ---
 
@@ -214,21 +289,41 @@ docker run -d --name contextshield-pg `
    `psql -U postgres -h localhost -c "ALTER USER postgres PASSWORD 'new-password';"`
 5. **Revert `pg_hba.conf` immediately** and restart the service again.
 
-### Recreate the database from scratch
+### Recreate a *local development* database from scratch
+
+> **Destructive — local development only.** This deletes every row in the
+> local `contextshield` database. Never run it against a deployment, and never
+> as part of automated setup, tests, or startup. There is no confirmation
+> prompt in the commands below; run them only when you intend the loss.
 
 ```powershell
-# as superuser
-psql -U postgres -h localhost -d postgres -c "DROP DATABASE IF EXISTS contextshield;"
-psql -U postgres -h localhost -d postgres -f backend\scripts\create_database.sql
-# as the app user (from backend/)
+# 1. Stop the backend first so it cannot reconnect mid-drop.
+# 2. As superuser (will drop all local demo rows):
+& "C:\Program Files\PostgreSQL\18\bin\psql.exe" -U postgres -h localhost -d postgres `
+    -c "DROP DATABASE IF EXISTS contextshield;"
+& "C:\Program Files\PostgreSQL\18\bin\psql.exe" -U postgres -h localhost -d postgres `
+    -f backend\scripts\create_database.sql
+# 3. As the app user, from backend/:
 python -m alembic upgrade head
 python -m app.seed
 ```
 
-### Reset just the schema (keep the database)
+For Docker, deleting the local demo data requires explicitly removing the
+volume:
+
+```powershell
+docker compose down          # keeps data (normal)
+# docker compose down -v     # DESTRUCTIVE: removes the pgdata volume — local demo only
+```
+
+### Reset just the local schema (keep the database)
+
+> **Destructive — local development only.** `downgrade base` drops the schema
+> and all local rows.
 
 ```powershell
 cd backend
+python -m alembic current          # confirm you are on the local demo DB
 python -m alembic downgrade base
 python -m alembic upgrade head
 python -m app.seed

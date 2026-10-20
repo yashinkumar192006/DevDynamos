@@ -1,24 +1,25 @@
 # ContextShield — Development Roadmap
 
-> **Version:** 1.1.0  
-> **Status:** Reflects implemented Prompts 1–9 (backend, pipeline, audit APIs, SDK, examples)  
-> **Last Updated:** 2026-10-19
+> **Version:** 1.4.0  
+> **Status:** Reflects implemented Prompts 1–12 (backend, pipeline, audit APIs, SDK, examples, React console, hardening & verification, Docker/CI/deployment readiness, DEVHOST demo, release documentation)  
+> **Last Updated:** 2026-10-20
 
 ---
 
 ## 1. Current State Assessment
 
-### What Exists (as of 2026-10-19)
+### What Exists (as of 2026-10-20)
 
 | Component                     | Status           | Details                                    |
 |-------------------------------|------------------|--------------------------------------------|
 | **Repository structure**      | ✅ Complete       | All directories, `.gitignore`, `.env.example` |
 | **Docker Compose**            | ✅ Complete       | PostgreSQL + backend + frontend services   |
 | **Backend Dockerfile**        | ✅ Complete       | Python 3.12, spaCy model download          |
-| **CI pipeline**               | ✅ Complete       | GitHub Actions: backend tests + SDK tests + frontend lint |
+| **CI pipeline**               | ✅ Complete       | GitHub Actions: backend tests + SDK tests + frontend lint/type-check + Playwright E2E against a seeded PostgreSQL service |
+| **Hardening & verification**  | ✅ Complete       | Login throttling, request-id correlation, log sanitizer, generic 500s, process-wide mosaic guard — evidence in `docs/verification-report.md` |
 | **FastAPI app skeleton**      | ✅ Complete       | Full versioned API: auth, admin, privacy pipeline, audit, system status |
 | **Backend dependencies**      | ✅ Complete       | `requirements.txt` with all core deps      |
-| **Frontend scaffold**         | ✅ Scaffold       | Vite + React + TypeScript default app      |
+| **Frontend scaffold**         | ✅ Complete       | React 19 + Vite + TypeScript; full console listed below |
 | **Backend modules**           | ✅ Complete       | Layered API / schemas / services / repositories / models |
 | **Database models**           | ✅ Complete       | ORM models + Alembic migrations (`docs/database-design.md`) |
 | **Alembic migrations**        | ✅ Complete       | Schema + audit actor-kind migration; upgrade/downgrade verified |
@@ -33,9 +34,12 @@
 | **Audit service**             | ✅ Complete       | Polymorphic actors (user/service), scoped query APIs, explainability |
 | **Privacy pipeline**          | ✅ Complete       | Blocked requests: no retrieval, no model call — always audited |
 | **SDK**                       | ✅ Complete       | Typed `contextshield` client, packaging, tests (see `sdk/`) |
-| **Frontend UI**               | 🔲 Not started   | Default Vite scaffold only                 |
-| **E2E tests**                 | 🔲 Not started   | Backend integration suites complete; root `tests/` still empty |
-| **Documentation**             | ✅ Complete       | All 9 specification documents + integration guide & runnable examples |
+| **Frontend console**          | ✅ Complete       | React 19 + Vite + TS + Tailwind 4: login, dashboard (Recharts), simulator, audit + detail, policies, assets, system status, SDK page (`frontend/`) |
+| **Dashboard/policy/asset APIs** | ✅ Complete     | `GET /api/v1/dashboard/overview`, `/policies`, `/data/assets` — visibility-scoped, metadata-only |
+| **E2E tests**                 | ✅ Playwright     | 12 journeys against the real backend (login, ALLOW/BLOCK, audit trail + scope isolation, session expiry, admin-only controls, SDK page) |
+| **Docker readiness**          | ✅ Verified       | Non-root backend image, DB wait → migrations → optional seed, frontend image, compose secret scoping; fresh-volume stack PASS |
+| **DEVHOST demonstration**     | ✅ Verified       | Ten scenarios with expected/actual evidence (`docs/devhost-demo.md`) |
+| **Documentation**             | ✅ Complete       | 18 docs + 5 component READMEs (23 Markdown files) incl. deployment, DEVHOST, API, DB, verification and release reports |
 
 ---
 
@@ -188,9 +192,16 @@
 
 ---
 
-### Phase 7: Frontend Dashboard 🖥️
+### Phase 7: Frontend Dashboard 🖥️ — ✅ Implemented (Prompt 10)
 
 **Goal:** Build the React demonstration frontend.
+
+Implemented: login with demo-identity prefill, real dashboard metrics
+(Recharts), privacy request simulator with scenarios and full decision
+rendering, audit browser + explainability detail, policy viewer, data-asset
+catalogue, system status, 403/404 pages, responsive layout, and Playwright
+journeys against the real backend (`frontend/README.md`). A frontend
+Dockerfile remains deferred (Docker Compose tasking).
 
 | Task                                              | Priority | Estimated Effort | Dependencies |
 |---------------------------------------------------|----------|------------------|--------------|
@@ -217,9 +228,17 @@
 
 ---
 
-### Phase 8: Testing & CI/CD 🧪
+### Phase 8: Testing & CI/CD 🧪 — ✅ Implemented (Prompt 11, extended in Prompt 12)
 
-**Goal:** Comprehensive test coverage and CI/CD pipeline.
+Implemented: 335 backend tests (unit + integration + security; two
+dedicated modules cover the 14 critical-property checks V01–V14 and the
+operational hardening suite), 32 SDK tests (incl. opt-in live-gateway
+tests; live run 2/2 passed), 12 Playwright journeys, and CI jobs for
+backend, SDK, frontend lint/type-check, and E2E against a seeded
+PostgreSQL service. Docker image builds and a fresh-volume compose stack
+were verified locally. Test-coverage **percentage** is not measured; the
+behavioral evidence is enumerated instead. Exact commands and evidence:
+`docs/verification-report.md` and `docs/release-report.md`.
 
 | Task                                              | Priority | Estimated Effort | Dependencies |
 |---------------------------------------------------|----------|------------------|--------------|
@@ -239,9 +258,16 @@
 
 ---
 
-### Phase 9: Documentation & Polish 📝
+### Phase 9: Documentation & Polish 📝 — ✅ Implemented (Prompt 12)
 
-**Goal:** Finalize documentation, examples, and deployment readiness.
+Implemented: deployment guide (Render/Vercel/compose, migrations, CORS,
+troubleshooting), database setup/recovery, API/Swagger reconciliation,
+SDK integration guide and clean-environment install verification, DEVHOST
+runbook with recorded expected/actual results, and the final
+verification/release reports. Screenshots, architecture images, and a demo
+video were **not** produced; those visual-asset tasks remain optional and
+unverified. Deployment itself is **not executed** (no remote resources were
+created).
 
 | Task                                              | Priority | Estimated Effort | Dependencies |
 |---------------------------------------------------|----------|------------------|--------------|
@@ -280,10 +306,10 @@ Phase 1 (Foundation)
 | **M3: Policy engine works**        | Phase 3  | Norms match, actions applied, fail-closed verified    |
 | **M4: Core API complete**  ⭐     | Phase 4  | All 14 demo scenarios pass as integration tests       |
 | **M5: LLM integration**           | Phase 5  | Mock LLM + output guard functional                    |
-| **M6: SDK published**             | Phase 6  | `pip install -e ./sdk` works + tests pass             |
+| **M6: SDK installable**           | Phase 6  | `pip install -e ./sdk` works + tests pass (registry publishing not done) |
 | **M7: Frontend demo**             | Phase 7  | Login → dashboard → test request → audit log          |
-| **M8: Test coverage**             | Phase 8  | ≥80% coverage, E2E tests pass                         |
-| **M9: Release-ready**             | Phase 9  | Docs complete, Docker works, demo video recorded      |
+| **M8: Test evidence**             | Phase 8  | Backend/SDK/E2E suites pass; coverage percentage not measured |
+| **M9: Release-ready (local)**     | Phase 9  | Docs complete, Docker/compose verified, DEVHOST demo runnable; deployment and video not executed |
 
 ---
 
@@ -293,7 +319,7 @@ Phase 1 (Foundation)
 |------------------------------------------------|--------|------------|-----------------------------------------------------|
 | Presidio/spaCy model download slows CI         | Medium | High       | Cache models in CI; pre-download in Dockerfile      |
 | Policy engine edge cases cause false positives  | High   | Medium     | Exhaustive test scenarios; fail-closed is safe       |
-| PostgreSQL connection issues in tests           | Medium | Medium     | Use SQLite for unit tests; PG for integration       |
+| PostgreSQL connection issues in tests           | Medium | Medium     | PostgreSQL service in CI; no SQLite fallback (behavior would diverge) |
 | Frontend scope creep                           | Medium | High       | Frontend is demo only — minimal viable UI           |
 | LLM hallucination volume overwhelms guard       | Low    | Low        | Mock LLM for demos; guard is best-effort v1         |
 | Token expiry disrupts demo                     | Low    | Medium     | 30-min tokens; demo scripts handle re-auth          |
@@ -306,7 +332,7 @@ Phase 1 (Foundation)
 |-----------------------------------------|-------|------------------------------------------|
 | SQLite fallback for tests               | 1     | Consider async SQLite driver or separate config |
 | Refresh tokens                          | 1     | v1 uses re-login; add refresh in v2       |
-| Rate limiting middleware                | 4     | Deferred to v2; document as known gap     |
+| Rate limiting middleware                | 1     | Login throttling shipped (v1, per-process); global per-tier quotas deferred to v2 |
 | Differential privacy noise             | 3     | Deferred to v2; k-anonymity is v1 baseline |
 | Policy authoring UI                     | 7     | Policies managed via seed scripts in v1    |
 | Multi-tenant isolation                  | —     | Out of scope for v1                        |

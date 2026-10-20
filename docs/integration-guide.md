@@ -200,10 +200,17 @@ Full contract: [`docs/api-design.md`](api-design.md) §4.8–4.9.
 
 ```powershell
 pip install -e sdk        # from the repository root (editable, development)
+# or build/install a wheel from the same directory:
+pip install sdk
 ```
 
-The package is typed (`py.typed`), depends only on `httpx`, requires
-Python ≥ 3.10, and ships no credentials.
+Package: `contextshield` **version 0.1.0** (Alpha). The package is typed
+(`py.typed`), depends only on `httpx`, requires Python ≥ 3.10, and ships no
+credentials. It is prepared for a package registry but **not yet published**;
+install from the repository. Verified in a clean virtual environment: install
+exit 0, `pip check` clean, `contextshield.__version__ == "0.1.0"`, `py.typed`
+present, and a live request against the running gateway returned a typed
+`ALLOW` result with request/audit ids.
 
 ### 4.2 Configure
 
@@ -364,7 +371,7 @@ else { /* surface result.overall_decision — do not retry around it */ }
 → curl / JavaScript / PowerShell walkthroughs:
 [`examples/http/README.md`](../examples/http/README.md)
 
-### 5.5 End-to-end demo
+### 5.5 End-to-end demos
 
 [`examples/demo_end_to_end.py`](../examples/demo_end_to_end.py) runs the full
 story on the seeded synthetic data: a customer's request for **another**
@@ -372,20 +379,38 @@ customer's data returns `BLOCK` (no data, no model call), the same customer's
 request for their **own** order returns `ALLOW` (with a mock-LLM summary),
 and the audit trail for the session is printed at the end.
 
+[`examples/agent_full_flow.py`](../examples/agent_full_flow.py) walks the
+complete governed sequence for one agent: intent → SDK → verified identity and
+policy → authorized retrieval → transformations → approved model context →
+mock LLM → output guard → approved answer, followed by a blocked request that
+contains a prompt-injection string and a gateway-unreachable check that fails
+closed (no direct-data fallback).
+
+[`examples/devhost_demo.py`](../examples/devhost_demo.py) is the ten-scenario
+DEVHOST demonstration against the real backend, printing expected vs actual for
+each scenario. Runbook and recorded results:
+[`docs/devhost-demo.md`](devhost-demo.md).
+
 ---
 
 ## 6. Verification
 
-| Check | Command |
-|---|---|
-| Backend suite (incl. audit API, pipeline, auth) | `cd backend && pytest tests/ -q` |
-| SDK suite (self-contained; simulated gateway) | `cd sdk && pytest tests -q` |
-| SDK install from a clean environment | `pip install -e sdk` in a fresh venv |
-| Live gateway check (opt-in) | set `CONTEXTSHIELD_LIVE_GATEWAY_URL` (+ credentials) and run `pytest sdk/tests/test_live_gateway.py -v` |
-| Runnable examples | `python examples/demo_end_to_end.py` etc. (gateway + seeded DB) |
+| Check | Command | Last result |
+|---|---|---|
+| Backend suite (incl. audit API, pipeline, auth, security properties, hardening) | `cd backend && python -m pytest tests -q` | 335 passed, 0 failed, 0 skipped |
+| SDK suite (self-contained; simulated gateway) | `cd sdk && python -m pytest tests -q` | 32 passed, 2 skipped (live tests opt-in) |
+| SDK install in a clean environment | `python -m venv <tmp> && <tmp>\Scripts\python -m pip install sdk` | install exit 0, `pip check` clean, live request verified |
+| Live gateway check (opt-in) | set `CONTEXTSHIELD_LIVE_GATEWAY_URL` (+ credentials) and run `python -m pytest sdk/tests/test_live_gateway.py -v` | 2 passed (seeded customer account) |
+| Runnable examples | `python examples/agent_full_flow.py`, `python examples/devhost_demo.py` (gateway + seeded DB) | all scenarios PASS |
+| Frontend quality gates | `cd frontend && npm run lint && npm run type-check && npm run build` | exit 0, production build succeeds |
+| Frontend E2E (real backend) | `cd frontend && npm run e2e` | 12 passed |
+| Docker images + stack | `docker compose build` then `docker compose up -d db backend frontend` | build PASS; fresh-volume migrations + idempotent seed + health PASS |
 
-CI runs the backend and SDK suites on every push
-(`.github/workflows/ci.yml`: `backend-tests`, `sdk-tests`, `frontend-lint`).
+CI (`.github/workflows/ci.yml`) runs the backend suite, SDK suite, frontend
+lint/type-check/build, and a `frontend-e2e` job on GitHub infrastructure. The
+frontend-e2e job has not yet executed on GitHub at the time of writing (no push
+was made for Prompts 10–12); the same suite passed locally against the real
+backend.
 
 ---
 

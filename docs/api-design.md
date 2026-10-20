@@ -1,8 +1,8 @@
 # ContextShield — API Design & Contract
 
 > **Version:** 1.0.0  
-> **Status:** Draft — Pre-implementation  
-> **Last Updated:** 2026-10-18
+> **Status:** Implemented — reconciled with the running FastAPI application  
+> **Last Updated:** 2026-10-20
 
 ---
 
@@ -15,7 +15,31 @@
 | **Format**        | JSON (application/json)                      |
 | **Auth**          | JWT Bearer token (HS256)                     |
 | **Docs**          | Swagger UI at `/docs`, ReDoc at `/redoc`     |
+| **OpenAPI**       | `/openapi.json`                              |
 | **Versioning**    | URL path (`/api/v1/`)                        |
+
+### Using Swagger UI
+
+1. Start the backend and open `http://localhost:8000/docs`. The schema is served
+   from `/openapi.json` (no authentication to read it).
+2. Call `POST /api/v1/auth/login` with a seeded demo account, or create a
+   service account with `python -m app.create_service_account` (API-key auth).
+3. Click **Authorize**:
+   * **BearerAuth** → paste the `access_token` returned by login (without the
+     `Bearer ` prefix).
+   * **ApiKeyAuth** → paste a service-account key for `X-API-Key`.
+4. Use **Try it out** on `POST /api/v1/privacy/secure-request` to submit the
+   core request body. `ALLOW`/`BLOCK`/`ESCALATION_NEEDED` are normal HTTP 200
+   decisions; validation and authentication use the error envelope below.
+5. `GET /api/v1/system/status` confirms database/provider/classifier health.
+6. Generated OpenAPI JSON is the source of truth for paths; if this document
+   and the running schema disagree, treat the schema as authoritative and fix
+   the document.
+
+Verified in this environment: `/docs` → HTTP 200 (Swagger UI), `/openapi.json`
+→ HTTP 200, and the schema lists `/health`, `/api/v1/health`, auth
+login/logout/me/whoami, secure-request, policies, audit list/detail,
+dashboard, data assets, system status, and admin users.
 
 ---
 
@@ -43,9 +67,12 @@ v1 does not implement refresh tokens. Users must re-authenticate when the token 
 | `GET /api/v1/health`                  | No            | —                  |
 | `GET /api/v1/system/status`           | Yes           | Any authenticated  |
 | `POST /api/v1/auth/login`             | No            | —                  |
+| `POST /api/v1/auth/logout`            | Yes           | Any authenticated  |
 | `GET /api/v1/auth/me`                 | Yes           | Any authenticated  |
+| `GET /api/v1/auth/whoami`             | Yes           | Any authenticated  |
+| `GET /api/v1/admin/users`             | Yes           | Administrator      |
 | `POST /api/v1/privacy/secure-request` | Yes           | Any authenticated  |
-| `GET /api/v1/policies`                | Yes           | Any authenticated  |
+| `GET /api/v1/policies`                | Yes           | Any authenticated (inactive history: administrators only) |
 | `GET /api/v1/audit/events`            | Yes           | Any authenticated (visibility-scoped — see §4.8) |
 | `GET /api/v1/audit/events/{id}`       | Yes           | Any authenticated (visibility-scoped — see §4.9) |
 | `GET /api/v1/dashboard/overview`      | Yes           | Any authenticated  |
@@ -57,31 +84,46 @@ v1 does not implement refresh tokens. Users must re-authenticate when the token 
 
 ### 3.1 Error Response
 
-All error responses follow this format:
+Application errors raised by the gateway follow this format:
 
 ```json
 {
   "error": {
-    "code": "AUTHORIZATION_FAILED",
-    "message": "You do not have permission to access this resource.",
-    "request_id": "req-550e8400-e29b-41d4-a716-446655440000",
-    "timestamp": "2026-10-18T11:30:00Z"
+    "type": "AuthorizationError",
+    "detail": "Not authorized"
   }
 }
 ```
 
+The correlation id is **not** in the body: every response carries a
+server-generated `X-Request-ID` header (32 lowercase hex characters), and
+that same id appears in server logs for the failing request. The id is
+never accepted from the client.
+
+Two framework-level shapes also occur (both still traceable via
+`X-Request-ID`):
+
+* request-validation failures (`422`) use FastAPI's standard
+  `{"detail": [ { "loc": …, "msg": …, "type": … } ]}` shape;
+* unknown routes return `{"detail": "Not Found"}`.
+
+Internal errors (`500`) return a generic body — `{"error": {"type":
+"InternalServerError", "detail": "Internal server error"}}` — and never
+include exception messages, table names, or stack traces.
+
 ### 3.2 Standard Error Codes
 
-| HTTP Status | Error Code                | Description                                 |
+| HTTP Status | `error.type` / shape        | Description                                 |
 |-------------|---------------------------|---------------------------------------------|
-| 400         | `VALIDATION_ERROR`        | Request body failed Pydantic validation     |
-| 401         | `AUTHENTICATION_REQUIRED` | Missing or invalid JWT token                |
-| 401         | `TOKEN_EXPIRED`           | JWT token has expired                       |
-| 403         | `AUTHORIZATION_FAILED`    | Valid token but insufficient permissions    |
-| 404         | `NOT_FOUND`               | Requested resource does not exist           |
-| 422         | `UNPROCESSABLE_ENTITY`    | Request is syntactically valid but semantically invalid |
-| 429         | `RATE_LIMITED`             | Too many requests (v2)                      |
-| 500         | `INTERNAL_ERROR`          | Server-side error with request ID for correlation |
+| 401         | `AuthenticationError`     | Missing, invalid, or expired credentials (`WWW-Authenticate: Bearer`) |
+| 403         | `AuthorizationError`      | Verified identity without the required role/permission |
+| 404         | `{"detail": "Not Found"}` or `error.type` = `HTTPException` | Resource does not exist or is outside your visibility scope |
+| 422         | FastAPI `detail` list     | Request body failed schema validation       |
+| 429         | `RateLimitError`          | Too many failed sign-in attempts; `Retry-After` header (seconds) |
+| 500         | `InternalServerError`     | Unhandled server-side error (generic body; details go to the server log only) |
+
+Route-level 405s (method not allowed — e.g. writing to the audit trail)
+use the framework's standard shape.
 
 ### 3.3 Pagination
 
@@ -165,16 +207,19 @@ Query parameters: `?limit=20&offset=0`
 **Request Body:**
 ```json
 {
-  "email": "hr.manager@contextshield.demo",
-  "password": "demo-password-123"
+  "username": "sarah.chen",
+  "password": "********"
 }
 ```
 
 **Schema:**
 | Field      | Type   | Required | Validation                |
 |------------|--------|----------|---------------------------|
-| `email`    | string | Yes      | Valid email format         |
-| `password` | string | Yes      | 8–128 characters           |
+| `username` | string | Yes      | 1–100 characters           |
+| `password` | string | Yes      | 1–256 characters           |
+
+Extra fields are ignored — a client cannot smuggle `role` / `is_admin`
+into the login call (verified by `test_v06`).
 
 **Response (200):**
 ```json
@@ -183,11 +228,15 @@ Query parameters: `?limit=20&offset=0`
   "token_type": "bearer",
   "expires_in": 1800,
   "user": {
-    "id": "550e8400-e29b-41d4-a716-446655440000",
-    "email": "hr.manager@contextshield.demo",
-    "full_name": "Alice Chen",
-    "role": "hr_manager",
-    "department": "Human Resources"
+    "id": "…",
+    "username": "sarah.chen",
+    "email": "sarah.chen@contextshield.dev",
+    "full_name": "Sarah Chen",
+    "department": "Human Resources",
+    "employee_id": "EMP001",
+    "is_active": true,
+    "roles": [{"name": "hr_manager", "description": "…"}],
+    "permissions": [{"resource": "employee_salary", "action": "read"}]
   }
 }
 ```
@@ -196,18 +245,24 @@ Query parameters: `?limit=20&offset=0`
 ```json
 {
   "error": {
-    "code": "AUTHENTICATION_REQUIRED",
-    "message": "Invalid email or password.",
-    "request_id": "req-...",
-    "timestamp": "2026-10-18T11:30:00Z"
+    "type": "AuthenticationError",
+    "detail": "Invalid username or password"
   }
 }
 ```
 
+**Error (429 — repeated failures):** identical body shape with `type` =
+`RateLimitError`, plus a `Retry-After` header. Throttling checks run
+before credential verification and count failures only for the same
+username + client address (with an address-level backstop).
+
 **Security notes:**
-- The error message is intentionally vague ("Invalid email or password") to prevent user enumeration.
+- The error message is intentionally vague ("Invalid username or password")
+  and identical for unknown users, wrong passwords, and inactive accounts —
+  no account enumeration.
 - Password comparison is timing-safe (bcrypt).
-- Failed attempts are logged for audit.
+- Failed and successful attempts are written to the audit trail
+  (usernames only, never passwords or tokens).
 
 ---
 
@@ -388,9 +443,14 @@ Query parameters: `?limit=20&offset=0`
 
 ---
 
-### 4.7 `GET /api/v1/policies`
+### 4.7 `GET /api/v1/policies` — implemented
 
-**Purpose:** List all active privacy policies. Useful for understanding what rules are in effect.
+**Purpose:** List privacy policies — the rules the policy engine enforces.
+Active policies are readable by **any authenticated principal**; inactive /
+superseded / archived versions are administrative history and require an
+administrator identity (user role `admin`, or a service account with `*` /
+`role:admin` / policy-admin scopes). Non-admins asking for
+`include_inactive=true` receive `403`.
 
 **Headers:** `Authorization: Bearer <token>`
 
@@ -399,35 +459,42 @@ Query parameters: `?limit=20&offset=0`
 |-----------|--------|---------|------------------------------------|
 | `limit`   | int    | 20      | Items per page (1–100)             |
 | `offset`  | int    | 0       | Pagination offset                  |
-| `role`    | string | —       | Filter by applicable role          |
-| `data_type` | string | —     | Filter by data type                |
+| `resource`| string | —       | Only policies whose `resource_pattern` matches this resource (exact, or trailing-`*` prefix — the same semantics the engine uses) |
+| `role`    | string | —       | Filter by `required_role`          |
+| `include_inactive` | bool | `false` | Include superseded/archived versions (administrators only) |
 
 **Response (200):**
 ```json
 {
   "items": [
     {
-      "id": "P-hr-salary-review",
-      "version": 2,
-      "name": "HR Salary Review",
-      "description": "HR managers may access full salary data for performance reviews.",
-      "allowed_roles": ["hr_manager"],
-      "data_types": ["SALARY", "PERSON_NAME", "DEPARTMENT"],
-      "allowed_purposes": ["performance_review", "compensation_planning"],
+      "id": "pol-…",
+      "name": "salary_access_policy",
+      "version": 1,
+      "description": "HR manager salary access for performance reviews.",
+      "policy_text": "HR managers may read salary data for direct reports during reviews.",
+      "resource_pattern": "employee_salary",
+      "required_role": "hr_manager",
+      "min_sensitivity": "restricted",
+      "allowed_purposes": ["hr_review"],
+      "allowed_actions": ["read"],
       "action": "ALLOW",
       "priority": 100,
+      "status": "active",
       "is_active": true,
-      "effective_from": "2026-01-01T00:00:00Z"
+      "effective_from": "2026-01-01T00:00:00Z",
+      "effective_until": null
     }
   ],
-  "pagination": {
-    "total": 8,
-    "limit": 20,
-    "offset": 0,
-    "has_more": false
-  }
+  "pagination": { "total": 12, "limit": 20, "offset": 0, "has_more": false }
 }
 ```
+
+* The projection is allowlisted — nothing outside this shape can leak even
+  if the policy store grows.
+* `policy_text` is the human-readable rule summary (the same text shipped
+  in `docs/privacy-policies.md`); it contains no secrets or protected data.
+* Ordering is `name` ascending, then version descending (newest first).
 
 ---
 
@@ -607,113 +674,122 @@ the recorded trail entry.
 
 ---
 
-### 4.10 `GET /api/v1/dashboard/overview`
+### 4.10 `GET /api/v1/dashboard/overview` — implemented
 
-**Purpose:** Dashboard summary metrics for the authenticated user's view.
+**Purpose:** Dashboard summary metrics for the authenticated caller's
+visible audit trail. Counting follows the audit visibility model (§4.8):
+administrators see the full trail (`scope: "full"`), compliance roles the
+privacy pipeline (`"privacy_trail"`), everyone else only their own events
+(`"own"`). All numbers are aggregated from **recorded audit events** and
+live configuration — nothing is fabricated; an empty trail yields zeros.
 
 **Headers:** `Authorization: Bearer <token>`
+
+**Query Parameters:**
+| Parameter      | Type | Default | Description                     |
+|----------------|------|---------|---------------------------------|
+| `window_days`  | int  | 14      | Look-back window in days (1–90) |
+| `recent_limit` | int  | 8       | Recent decisions to embed (1–50) |
 
 **Response (200):**
 ```json
 {
+  "scope": "own",
+  "window_days": 14,
   "summary": {
-    "total_requests_today": 47,
-    "total_requests_week": 312,
-    "decisions": {
-      "ALLOW": 189,
-      "PARTIAL_ALLOW": 85,
-      "BLOCK": 28,
-      "ESCALATION_NEEDED": 10
-    },
-    "guard_triggered_count": 3,
-    "mosaic_warnings_count": 2
+    "window_days": 14,
+    "total_requests": 47,
+    "decisions": { "ALLOW": 30, "PARTIAL_ALLOW": 5, "BLOCK": 10, "ESCALATION_NEEDED": 2 },
+    "requests_with_transformations": 6,
+    "model_invocations": 4,
+    "guard_triggered": 1,
+    "mosaic_warnings": 2
   },
-  "recent_events": [
-    {
-      "id": "aud-...",
-      "timestamp": "2026-10-18T11:30:00Z",
-      "requester_role": "hr_manager",
-      "overall_decision": "PARTIAL_ALLOW",
-      "target_entity_id": "employee-456"
-    }
+  "daily": [
+    { "date": "2026-10-05", "total": 5, "allow": 3, "partial_allow": 1, "block": 1, "escalation": 0 }
   ],
-  "policy_stats": {
-    "active_policies": 8,
-    "most_triggered_policy": "hr_salary_review",
-    "most_blocked_data_type": "SSN"
+  "recent_decisions": [ { "id": "aud-…", "timestamp": "…", "action": "data_access",
+                          "actor": { "id": "…", "kind": "user", "name": "…", "roles": [], "scopes": [] },
+                          "overall_decision": "PARTIAL_ALLOW", "reason_codes": ["…"], "…": "…" } ],
+  "policy_stats": { "active_policies": 12, "most_triggered_policy": "salary_access_policy" },
+  "health": {
+    "database": "healthy",
+    "database_latency_ms": 1.24,
+    "llm": { "provider": "mock", "model": "mock-deterministic", "configured": true },
+    "classifier": { "status": "ready" }
   },
   "timestamp": "2026-10-18T11:30:00Z"
 }
 ```
 
+* `daily` is a continuous, zero-filled series for the window (one entry per
+  day, UTC) — chart-ready.
+* `recent_decisions` items use the same allowlisted projection as §4.8;
+  the newest `recent_limit` decision events are embedded.
+* `summary.total_requests` counts gateway decisions
+  (`data_access`/`data_denied` events); `requests_with_transformations`
+  counts decisions whose recorded detail includes applied transformations;
+  `model_invocations` counts `ai_query` events; `guard_triggered` counts
+  flipped output-inspection events; `mosaic_warnings` counts decision
+  events flagged for re-identification risk.
+* `health` mirrors the safe shapes of §4.3 (no keys or secrets ever).
+
 ---
 
-### 4.11 `GET /api/v1/data/assets`
+### 4.11 `GET /api/v1/data/assets` — implemented
 
-**Purpose:** List data assets and their classification metadata. Shows what data sources are available and how they are classified.
+**Purpose:** List data assets and their classification metadata — the
+catalog resources the gateway guards and the field classifications the
+policy engine relies on. Readable by **any authenticated principal**.
+
+**Classification metadata only.** The payload contains names, types,
+sensitivity levels, PII categories, and record *counts*; it never contains
+row data from the backing tables, so raw values cannot leak through this
+endpoint by construction.
 
 **Headers:** `Authorization: Bearer <token>`
 
 **Query Parameters:**
-| Parameter         | Type   | Default | Description                     |
-|-------------------|--------|---------|---------------------------------|
-| `limit`           | int    | 20      | Items per page (1–100)          |
-| `offset`          | int    | 0       | Pagination offset               |
-| `sensitivity`     | string | —       | Filter by sensitivity level     |
+| Parameter     | Type   | Default | Description                     |
+|---------------|--------|---------|---------------------------------|
+| `limit`       | int    | 20      | Items per page (1–100)          |
+| `offset`      | int    | 0       | Pagination offset               |
+| `sensitivity` | string | —       | Only assets containing at least one field at this level (`low`/`medium`/`high`/`restricted`) |
+| `asset_type`  | string | —       | Filter by asset type            |
 
 **Response (200):**
 ```json
 {
   "items": [
     {
-      "id": "da-employees",
-      "name": "Employee Records",
-      "description": "Core employee data including personal and compensation information.",
+      "id": "asset-…",
+      "name": "employee_salary",
+      "description": "Employee compensation and payroll data",
+      "asset_type": "employee_records",
+      "owner_department": "Human Resources",
       "table_name": "employees",
+      "field_count": 4,
+      "sensitivity_summary": { "low": 2, "medium": 0, "high": 1, "restricted": 1 },
+      "record_count": 25,
       "fields": [
         {
-          "name": "full_name",
-          "entity_type": "PERSON_NAME",
-          "sensitivity": "MEDIUM",
-          "source": "schema_annotation"
-        },
-        {
-          "name": "salary",
-          "entity_type": "SALARY",
-          "sensitivity": "RESTRICTED",
-          "source": "schema_annotation"
-        },
-        {
-          "name": "email",
-          "entity_type": "EMAIL",
-          "sensitivity": "MEDIUM",
-          "source": "schema_annotation"
-        },
-        {
-          "name": "ssn",
-          "entity_type": "SSN",
-          "sensitivity": "RESTRICTED",
-          "source": "schema_annotation"
-        },
-        {
-          "name": "department",
-          "entity_type": null,
-          "sensitivity": "LOW",
-          "source": "schema_annotation"
+          "name": "base_salary",
+          "column_name": "base_salary",
+          "field_type": "numeric",
+          "sensitivity": "restricted",
+          "pii_category": "salary",
+          "description": "Annual base salary"
         }
-      ],
-      "record_count": 25,
-      "last_updated": "2026-10-18T00:00:00Z"
+      ]
     }
   ],
-  "pagination": {
-    "total": 4,
-    "limit": 20,
-    "offset": 0,
-    "has_more": false
-  }
+  "pagination": { "total": 5, "limit": 20, "offset": 0, "has_more": false }
 }
 ```
+
+* `record_count` is the live row count of the backing table (metadata), or
+  `null` for assets without a known table.
+* Assets are ordered by `name`; fields are ordered by `name`.
 
 ---
 
@@ -733,9 +809,22 @@ the recorded trail entry.
 
 ---
 
-## 6. Rate Limiting (v2)
+## 6. Rate Limiting
 
-| Tier           | Limit                  | Window   |
+**Implemented (v1):** login throttling only — a failure-only sliding
+window per username + client address (`AUTH_RATE_LIMIT_MAX_FAILURES`,
+default 10/window) with a per-address backstop
+(`AUTH_RATE_LIMIT_IP_MAX_FAILURES`, default 50/window) and a configurable
+window (`AUTH_RATE_LIMIT_WINDOW_SECONDS`, default 60). Exceeding the
+limit returns `429` + `Retry-After` before credential verification.
+Successful sign-ins are never throttled and clear their own counter.
+Per-process, in-memory — see the limitations in
+`docs/verification-report.md`.
+
+**Not yet implemented (v2 candidates):** global per-tier quotas below.
+They remain design targets, not shipped behavior.
+
+| Tier           | Limit (proposed)       | Window   |
 |----------------|------------------------|----------|
 | Unauthenticated| 10 requests            | 1 minute |
 | Authenticated  | 100 requests           | 1 minute |

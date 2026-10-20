@@ -1,8 +1,8 @@
 # ContextShield — Architecture Document
 
-> **Version:** 1.0.0  
-> **Status:** Draft — Pre-implementation  
-> **Last Updated:** 2026-10-18
+> **Version:** 1.1.0  
+> **Status:** Implemented — reconciled with the current codebase  
+> **Last Updated:** 2026-10-20
 
 ---
 

@@ -37,6 +37,8 @@ from typing import Any, Awaitable, Callable, Mapping, Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings as app_settings
+
 from app.models import (
     AIInteraction,
     AuditAction,
@@ -83,6 +85,25 @@ logger = logging.getLogger(__name__)
 
 #: API contract: 1–50 fields per request (docs/api-design.md §4.6).
 MAX_REQUEST_FIELDS = 50
+
+# ── Shared repeated-aggregate (mosaic) guard ───────────────────────────
+# Connectors are constructed per request, so the sliding-window state for
+# the repeated-query control must live at module level — otherwise the
+# window could never span requests and the control would never fire on
+# the HTTP path. Like the guard itself this is per-process, in-memory
+# state; see AggregateGuard's docstring for the scope and limitations.
+_shared_aggregate_guard: AggregateGuard | None = None
+
+
+def get_shared_aggregate_guard() -> AggregateGuard:
+    """Return the process-wide aggregate guard (built lazily from settings)."""
+    global _shared_aggregate_guard
+    if _shared_aggregate_guard is None:
+        _shared_aggregate_guard = AggregateGuard(
+            repeat_limit=getattr(app_settings, "POLICY_AGGREGATE_REPEAT_LIMIT", 5),
+            window_seconds=getattr(app_settings, "POLICY_AGGREGATE_WINDOW_SECONDS", 300),
+        )
+    return _shared_aggregate_guard
 
 #: Resource name → protected-data repository.
 _REPOSITORY_FOR_RESOURCE = {
@@ -192,9 +213,10 @@ class ProtectedDataConnector:
         self.engine = engine or PolicyEngine(session)
         self.analyzer = analyzer or ContextAnalyzer(session)
         self.transformer = transformer or Transformer()
-        self.aggregate_guard = aggregate_guard or AggregateGuard(
-            repeat_limit=getattr(self.engine.settings, "POLICY_AGGREGATE_REPEAT_LIMIT", 5),
-            window_seconds=getattr(self.engine.settings, "POLICY_AGGREGATE_WINDOW_SECONDS", 300),
+        self.aggregate_guard = (
+            aggregate_guard
+            if aggregate_guard is not None
+            else get_shared_aggregate_guard()
         )
         self.llm = llm
         self.persist = persist

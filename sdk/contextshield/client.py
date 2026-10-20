@@ -441,15 +441,20 @@ class ContextShieldClient:
             return
         if self._password_auth is None:  # pragma: no cover — defensive
             raise ConfigurationError("password authentication is not configured")
-        response = self._send(
-            "POST",
-            _LOGIN_PATH,
-            json_body={
-                "username": self._password_auth.username,
-                "password": self._password_auth.password,
-            },
-            headers={},
-        )
+        try:
+            response = self._send(
+                "POST",
+                _LOGIN_PATH,
+                json_body={
+                    "username": self._password_auth.username,
+                    "password": self._password_auth.password,
+                },
+                headers={},
+            )
+        except httpx.HTTPError as exc:
+            # Login is a transport call like any other: callers must get the
+            # SDK's typed errors (timeout/gateway-unavailable), never raw httpx.
+            raise self._transport_exception(exc, "POST", _LOGIN_PATH) from exc
         if response.status_code == 401:
             raise AuthenticationError(
                 "login failed: invalid username or password",
@@ -467,6 +472,24 @@ class ContextShieldClient:
             raise InvalidResponseError("login response is missing 'access_token'")
         self._bearer_token = token
         logger.debug("authenticated against %s as %s", self.base_url, self._password_auth.username)
+
+    def _transport_exception(
+        self, exc: httpx.HTTPError, method: str, path: str
+    ) -> ContextShieldError:
+        """Map an httpx transport failure to the SDK's public error types."""
+        if isinstance(exc, httpx.TimeoutException):
+            return RequestTimeoutError(
+                f"Request to {method} {path} timed out "
+                f"(timeout={self.timeout.connect}s)",
+            )
+        if isinstance(exc, httpx.TransportError):
+            return GatewayUnavailableError(
+                f"Could not reach the ContextShield gateway at "
+                f"{self.base_url} ({type(exc).__name__})",
+            )
+        return ContextShieldError(
+            f"HTTP error while calling the gateway: {exc}"
+        )
 
     def _send(
         self,
@@ -505,23 +528,15 @@ class ContextShieldClient:
                     method, path, json_body=json_body, params=params, headers=headers
                 )
             except httpx.TimeoutException as exc:
-                raise RequestTimeoutError(
-                    f"Request to {method} {path} timed out "
-                    f"(timeout={self.timeout.connect}s)",
-                ) from exc
+                raise self._transport_exception(exc, method, path) from exc
             except httpx.TransportError as exc:
                 if attempt < self.max_retries:
                     attempt += 1
                     time.sleep(self.retry_backoff * attempt)
                     continue
-                raise GatewayUnavailableError(
-                    f"Could not reach the ContextShield gateway at "
-                    f"{self.base_url} ({type(exc).__name__})",
-                ) from exc
+                raise self._transport_exception(exc, method, path) from exc
             except httpx.HTTPError as exc:  # pragma: no cover — defensive
-                raise ContextShieldError(
-                    f"HTTP error while calling the gateway: {exc}"
-                ) from exc
+                raise self._transport_exception(exc, method, path) from exc
 
             duration_ms = int((time.monotonic() - started) * 1000)
             logger.debug(
